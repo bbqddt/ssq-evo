@@ -10,13 +10,18 @@ import os, sys, json, argparse, datetime
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.environ.get("DATA_DIR", HERE)   # Docker 部署时通过环境变量指向 /app/data (= D 盘卷)
+# DATA_DIR: 优先用环境变量(Docker 部署传 /app/data)；未设置时默认 D:\ssq_evo_data(本机全在 D 盘，不写 C)
+DATA_DIR = os.environ.get("DATA_DIR")
+if not DATA_DIR:
+    _d = r"D:\ssq_evo_data"
+    DATA_DIR = _d if os.path.isdir(_d) else HERE
 os.makedirs(DATA_DIR, exist_ok=True)
 sys.path.insert(0, HERE)
 
 import engine_core as E
 import data as D
 import store as S
+import frontier as F
 
 MASTER = os.path.join(DATA_DIR, "ssq_master.csv")
 DB = os.path.join(DATA_DIR, "ssq_evo.db")
@@ -64,12 +69,17 @@ def main():
     N = len(reds)
     print(f"[cycle] N={N} 期, 新增 {added}, 末期 {issues[-1]}")
 
-    # 2. 演化
+    # 2. 演化（接入跨轮 frontier：精英 seed + 参数 hill-climbing + 去重）
     rng = np.random.default_rng(cfg["seed"] + N)  # 随样本量变化种子，避免每轮完全相同
+    fr = F.load_frontier(DATA_DIR)
+    elite_seeds = fr.get("elites", [])
+    print(f"[cycle] frontier: 历史覆盖度={fr.get('coverage',0)}, 精英种子={len(elite_seeds)}, "
+          f"z历史长度={len(fr.get('best_z_history',[]))}")
     evo = E.Evolution(reds, blues, rng, k_light=cfg["k_light"], k_heavy=cfg["k_heavy"],
-                      epochs=cfg["epochs"], pop=cfg["pop"])
+                      epochs=cfg["epochs"], pop=cfg["pop"],
+                      elites=elite_seeds, frontier=fr)
     leaderboard, all_evals = evo.run()
-    print(f"[cycle] 评估算子数(含重复去重前): {len(all_evals)}, 唯一算子: {len(leaderboard)}")
+    print(f"[cycle] 评估算子数(含重复): {len(all_evals)}, 唯一基因组: {len(leaderboard)}")
 
     # 3. FDR (跨全部评估)
     pvals = np.array([e["p_raw"] for e in all_evals])
@@ -98,21 +108,30 @@ def main():
 
     alert = (best_q < cfg["alert_q"]) and (oos_p is not None) and (oos_p < cfg["alert_oos_p"])
 
-    # 6. 持久化
+    # 6. 更新并持久化演化前沿（跨轮累积迭代）
+    prev_tried = len(fr.get("tried", []))
+    fr = F.update_frontier(fr, leaderboard, evo.tried, elite_k=12)
+    F.save_frontier(DATA_DIR, fr)
+    z_hist = fr["best_z_history"]
+    newly = fr["coverage"] - prev_tried
+    print(f"[cycle] 迭代进度: 覆盖度={fr['coverage']} (本论新增 {newly}), "
+          f"精英={len(fr['elites'])}, z轨迹末值={z_hist[-1] if z_hist else 'NA'}")
+
+    # 7. 持久化
     con = S.open_db(DB)
     run = {
         "ts": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "n_issues": N, "added": added, "n_eval": len(all_evals),
         "best_q": best_q, "best_sig": best["sig"], "best_test": best["test"],
         "best_p": best["p_raw"], "oos_p": (oos_p if oos_p is not None else -1.0),
-        "alert": alert,
+        "alert": alert, "coverage": fr["coverage"],
         "note": ("候选结构! 需人工复核" if alert else "无超越随机的可提取结构 (null)"),
     }
     rid = S.insert_run(con, run)
     S.insert_evals(con, rid, all_evals)
     con.close()
 
-    # 7. 写 state.json
+    # 8. 写 state.json
     lb_top = sorted(leaderboard.values(), key=lambda e: e["p_raw"])[:20]
     history = S.recent_runs(S.open_db(DB), 200)
     state = {
@@ -121,11 +140,16 @@ def main():
         "best_p": best["p_raw"], "best_stat": best["stat"], "best_z": best["z"],
         "oos_p": (oos_p if oos_p is not None else None), "alert": bool(alert),
         "n_eval": len(all_evals), "n_unique": len(leaderboard),
+        "coverage": fr["coverage"], "elite_count": len(fr["elites"]),
+        "best_z_history": z_hist,
         "params": cfg,
         "leaderboard": [
-            {"sig": e["sig"], "test": e["test"], "p_raw": e["p_raw"], "q": e.get("q", 1.0),
+            {"sig": e["sig"], "test": e["test"],
+             "params": e.get("params", {"_sig": {}, "_test": {}}),
+             "p_raw": e["p_raw"], "q": e.get("q", 1.0),
              "z": e["z"], "stat": e["stat"], "verdict": e["verdict"]} for e in lb_top],
-        "history": [{"ts": h[1], "best_q": h[4], "alert": bool(h[9])} for h in history],
+        "history": [{"ts": h[1], "best_q": h[4], "alert": bool(h[9]),
+                     "coverage": h[10] if len(h) > 10 else None} for h in history],
     }
     json.dump(state, open(STATE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 

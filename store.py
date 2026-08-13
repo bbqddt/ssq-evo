@@ -12,6 +12,11 @@ def open_db(path):
         ts TEXT, n_issues INTEGER, added INTEGER,
         n_eval INTEGER, best_q REAL, best_sig TEXT, best_test TEXT,
         best_p REAL, oos_p REAL, alert INTEGER, note TEXT)""")
+    # 增量迁移：新增 coverage 列（已存在则忽略）
+    try:
+        cur.execute("ALTER TABLE runs ADD COLUMN coverage INTEGER")
+    except sqlite3.OperationalError:
+        pass
     cur.execute("""CREATE TABLE IF NOT EXISTS evals(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         run_id INTEGER, gen INTEGER, sig TEXT, test TEXT, tier TEXT, direction TEXT,
@@ -24,10 +29,11 @@ def open_db(path):
 def insert_run(con, run):
     cur = con.cursor()
     cur.execute("""INSERT INTO runs(ts,n_issues,added,n_eval,best_q,best_sig,best_test,
-        best_p,oos_p,alert,note) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+        best_p,oos_p,alert,note,coverage) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
         (run["ts"], run["n_issues"], run["added"], run["n_eval"],
          run["best_q"], run["best_sig"], run["best_test"],
-         run["best_p"], run["oos_p"], int(run["alert"]), run["note"]))
+         run["best_p"], run["oos_p"], int(run["alert"]), run["note"],
+         int(run.get("coverage", 0))))
     rid = cur.lastrowid
     con.commit()
     return rid
@@ -45,7 +51,7 @@ def insert_evals(con, run_id, evals):
 
 def recent_runs(con, limit=200):
     cur = con.cursor()
-    cur.execute("SELECT id,ts,n_issues,added,best_q,best_sig,best_test,best_p,oos_p,alert FROM runs ORDER BY id DESC LIMIT ?", (limit,))
+    cur.execute("SELECT id,ts,n_issues,added,best_q,best_sig,best_test,best_p,oos_p,alert,coverage FROM runs ORDER BY id DESC LIMIT ?", (limit,))
     return cur.fetchall()
 
 
