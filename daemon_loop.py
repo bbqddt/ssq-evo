@@ -81,22 +81,38 @@ def load_cfg():
     try:
         return json.load(open(os.path.join(HERE, "config.json"), encoding="utf-8"))
     except Exception:
-        return {"schedule_hours": 6}
+        return {"schedule_hours": 0.25}   # 默认 15 分钟；可用 CYCLE_MINUTES 环境变量覆盖
 
 def main():
     acquire_lock()
     cfg = load_cfg()
-    hours = float(cfg.get("schedule_hours", 6))
+    # 优先环境变量 CYCLE_MINUTES（分钟）；0 或负数 = 连续模式(仅 60s 冷却)
+    minutes = None
+    env_min = os.environ.get("CYCLE_MINUTES")
+    if env_min is not None:
+        try:
+            minutes = float(env_min)
+        except ValueError:
+            minutes = None
+    if minutes is not None:
+        hours = 0.0 if minutes <= 0 else minutes / 60.0
+    else:
+        hours = float(cfg.get("schedule_hours", 0.25))
     py = sys.executable
-    print(f"[daemon] 常驻启动，周期 {hours}h，PID={os.getpid()}，锁={LOCK}")
+    label = "连续(60s冷却)" if hours == 0 else f"{hours}h"
+    print(f"[daemon] 常驻启动，周期 {label}，PID={os.getpid()}，锁={LOCK}")
     while True:
         try:
             subprocess.run([py, "-u", os.path.join(HERE, "run_cycle.py")],
                            cwd=HERE, check=False)
         except Exception as e:
             print("[daemon] cycle error:", e, flush=True)
-        print(f"[daemon] 下一轮在 {hours}h 后", flush=True)
-        time.sleep(hours * 3600)
+        if hours == 0:
+            print("[daemon] 连续模式，60s 后下一轮", flush=True)
+            time.sleep(60)
+        else:
+            print(f"[daemon] 下一轮在 {hours}h 后", flush=True)
+            time.sleep(hours * 3600)
 
 if __name__ == "__main__":
     main()

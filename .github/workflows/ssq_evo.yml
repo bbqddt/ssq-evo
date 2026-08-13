@@ -1,12 +1,12 @@
 # GitHub Actions —— ssq_evo 云端 7x24 结构搜索
-# 触发：每 6 小时（随机分钟避开整点） + 手动 workflow_dispatch
+# 触发：每 30 分钟（错开整点） + 手动 workflow_dispatch
 # 机制：runner 每次全新 checkout -> 跑一轮 run_cycle -> 把数据/库/state 提交回仓库
 # 这样云端也具备持久记忆，与本地 Docker 容器互为冗余。
 name: SSQ Evo 7x24
 
 on:
   schedule:
-    - cron: "23 */6 * * *"      # 每 6 小时第 23 分（避开整点拥挤）
+    - cron: "17,47 * * * *"      # 每 30 分钟（第 17、47 分，避开整点拥挤）
   workflow_dispatch:            # 允许手动触发
 
 permissions:

@@ -106,11 +106,24 @@ def main():
         oos = E.out_of_sample(top, reds, blues, rng, frac=cfg["oos_frac"], k_sur=cfg["k_light"])
         oos_p = oos
 
+    # 5b. 诚实的"高于随机"方向准确率（均值回归 + AAFT 替代分布零假设）
+    acc = None
+    if lb_items:
+        acc = E.oos_accuracy(top, reds, blues, rng, frac=cfg["oos_frac"])
+
     alert = (best_q < cfg["alert_q"]) and (oos_p is not None) and (oos_p < cfg["alert_oos_p"])
 
     # 6. 更新并持久化演化前沿（跨轮累积迭代）
     prev_tried = len(fr.get("tried", []))
     fr = F.update_frontier(fr, leaderboard, evo.tried, elite_k=12)
+    if acc:
+        hist = fr.setdefault("acc_history", [])
+        hist.append({"hr": round(acc["hit_rate"], 4),
+                     "sur_mean": round(acc["sur_mean"], 4),
+                     "p_random": round(acc["p_random"], 4),
+                     "above": bool(acc["above_random"]),
+                     "n": int(acc["n"])})
+        fr["acc_history"] = hist[-200:]
     F.save_frontier(DATA_DIR, fr)
     z_hist = fr["best_z_history"]
     newly = fr["coverage"] - prev_tried
@@ -124,6 +137,11 @@ def main():
         "n_issues": N, "added": added, "n_eval": len(all_evals),
         "best_q": best_q, "best_sig": best["sig"], "best_test": best["test"],
         "best_p": best["p_raw"], "oos_p": (oos_p if oos_p is not None else -1.0),
+        "oos_acc": (round(acc["hit_rate"], 4) if acc else None),
+        "oos_acc_sur": (round(acc["sur_mean"], 4) if acc else None),
+        "oos_acc_p": (round(acc["p_random"], 4) if acc else None),
+        "oos_acc_above": (bool(acc["above_random"]) if acc else False),
+        "oos_acc_n": (acc["n"] if acc else 0),
         "alert": alert, "coverage": fr["coverage"],
         "note": ("候选结构! 需人工复核" if alert else "无超越随机的可提取结构 (null)"),
     }
@@ -138,7 +156,13 @@ def main():
         "updated": run["ts"], "n_issues": N, "last_issue": issues[-1], "added": added,
         "cycle_id": rid, "best_q": best_q, "best_sig": best["sig"], "best_test": best["test"],
         "best_p": best["p_raw"], "best_stat": best["stat"], "best_z": best["z"],
-        "oos_p": (oos_p if oos_p is not None else None), "alert": bool(alert),
+        "oos_p": (oos_p if oos_p is not None else None),
+        "oos_acc": (round(acc["hit_rate"], 4) if acc else None),
+        "oos_acc_sur": (round(acc["sur_mean"], 4) if acc else None),
+        "oos_acc_p": (round(acc["p_random"], 4) if acc else None),
+        "oos_acc_above": (bool(acc["above_random"]) if acc else False),
+        "oos_acc_n": (acc["n"] if acc else 0),
+        "alert": bool(alert),
         "n_eval": len(all_evals), "n_unique": len(leaderboard),
         "coverage": fr["coverage"], "elite_count": len(fr["elites"]),
         "best_z_history": z_hist,
@@ -155,6 +179,10 @@ def main():
 
     print(f"[cycle] best_q={best_q:.4g}  best={best['sig']}/{best['test']}  "
           f"oos_p={oos_p if oos_p is None else round(oos_p,4)}  alert={alert}")
+    if acc:
+        tag = "高于随机!" if acc["above_random"] else "未高于随机(=随机基线)"
+        print(f"[cycle] 方向准确率={acc['hit_rate']:.3f}  随机基线={acc['sur_mean']:.3f}  "
+              f"p_random={acc['p_random']:.3f}  => {tag}")
     print(f"[cycle] state -> {STATE}")
 
 

@@ -634,3 +634,105 @@ def out_of_sample(ev, reds, blues, rng, frac=0.2, k_sur=25):
     if res is None:
         return None
     return res["p_raw"]
+
+
+def _oos_hitrate(series, cut, w):
+    """因果一步方向命中率（绝不偷看未来），带训练段择优。
+
+    关键事实：i.i.d. 序列的相邻一阶差分必然负相关(≈-0.5，因共享中间项)，
+    所以单一固定的方向预测器在随机数据上命中率并非 0.5，而是被该结构抬高/压低。
+    因此这里在「训练段」(t<cut) 比较两种朴素预测——延续(+sign) 与 反转(-sign)
+    上一期增量方向——选优者用于「样本外段」(t>=cut)，使预测器对随机数据也能
+    达到该结构下的理论最优(≈0.66)，避免系统性低估。替代分布对每条替代序列
+    重复同样择优，故选择偏差被零假设自动校准。
+
+    actual[k]=sign(s[k+1]-s[k])；预测只用 k 及以前样本，完全因果。
+    返回 (hr, tot) 或 (nan, 0)。"""
+    s = np.asarray(series, float)
+    nn = len(s)
+    inc = np.diff(s)                       # inc[k] = s[k+1]-s[k], k=0..nn-2
+    if inc.size < 4:
+        return float("nan"), 0
+    actual = np.sign(inc)                  # actual[k] = sign(inc[k])
+    pers = np.zeros(nn - 1)
+    pers[1:] = np.sign(inc[:-1])           # 延续：pred=sign(inc[k-1])
+    rev = np.zeros(nn - 1)
+    rev[1:] = -np.sign(inc[:-1])           # 反转
+    lo_t = max(w, cut)
+    tr_idx = np.arange(1, max(2, lo_t))    # 训练段 k in [1, lo_t)
+    def _hr(pred):
+        pv = pred[tr_idx]; av = actual[tr_idx]
+        v = (pv != 0) & (av != 0)
+        return float(np.mean(pv[v] == av[v])) if v.sum() >= 30 else 0.5
+    best = pers if _hr(pers) >= _hr(rev) else rev
+    os_idx = np.arange(lo_t, nn - 1)       # 样本外段 k in [lo_t, nn-2]
+    if os_idx.size < 30:
+        return float("nan"), 0
+    pv = best[os_idx]; av = actual[os_idx]
+    valid = (pv != 0) & (av != 0)
+    if valid.sum() < 30:
+        return float("nan"), 0
+    return float(np.mean(pv[valid] == av[valid])), int(valid.sum())
+
+
+def oos_accuracy(ev, reds, blues, rng, frac=0.2, w=60, k_sur=40):
+    """诚实的「高于随机」方向准确率。
+
+    规则：因果一步方向预测（预测器在训练段从「延续/反转」上一期增量方向中择优，
+    仅用 k 及以前样本，绝不偷看未来）。
+
+    诚实性约束（关键）：i.i.d. 序列的相邻差分必负相关(≈-0.5)，单一固定预测器在
+    随机数据上命中率并非 0.5 而是被结构抬高/压低；训练段择优让随机数据达到该结构
+    下的理论最优，避免系统性偏差。再用同分布 AAFT 替代序列集合作零假设——每条
+    替代序列重复同样择优，故选择偏差与边际偏移都被自动校准。真实命中率在替代
+    分布中的百分位 p_random 是诚实的「高于随机」度量：p_random <= 0.05 才算显著。
+
+    返回 dict 或 None（数据不足）。字段：
+      hit_rate      真实 OOS 方向命中率
+      sur_mean      替代序列命中率均值（即「随机基线」）
+      sur_std       替代序列命中率标准差
+      p_random      真实命中率在替代分布中的百分位(单侧,越小越显著)
+      above_random  p_random <= 0.05
+      k_sur         有效替代数
+      n             OOS 预测样本数
+    """
+    n = len(reds)
+    cut = int(n * (1 - frac))
+    if cut < w + 5 or (n - cut) < 40:
+        return None
+    sig = ev["sig"]
+    sp = (ev.get("params") or {}).get("_sig", {})
+    try:
+        x = SIGMAPS[sig](reds, blues, **sp) if sig in SIG_PARAM_SIGMAPS else SIGMAPS[sig](reds, blues)
+        x = np.asarray(x, float)
+    except Exception:
+        return None
+    if x.shape[0] != n:
+        return None
+    hr, tot = _oos_hitrate(x, cut, w)
+    if not np.isfinite(hr) or tot < 30:
+        return None
+    # 替代分布：AAFT 保留边际分布、破坏相位/自相关（正确零假设）
+    try:
+        surs = _gen_surrogates(x, int(k_sur), rng, "aaft")
+    except Exception:
+        surs = np.empty((0, n))
+    hr_sur = []
+    for i in range(surs.shape[0] if surs.ndim == 2 else 0):
+        h, _ = _oos_hitrate(surs[i], cut, w)
+        if np.isfinite(h):
+            hr_sur.append(h)
+    hr_sur = np.array(hr_sur) if hr_sur else np.empty(0)
+    if hr_sur.size == 0:
+        return None
+    # 单侧百分位：真实命中率排在第几；越小越「高于随机」
+    p_random = float((hr_sur >= hr).mean() + 0.5 / hr_sur.size)
+    return {
+        "hit_rate": hr,
+        "sur_mean": float(hr_sur.mean()),
+        "sur_std": float(hr_sur.std(ddof=0)) if hr_sur.size > 1 else 0.0,
+        "p_random": p_random,
+        "above_random": bool(p_random <= 0.05),
+        "k_sur": int(hr_sur.size),
+        "n": int(tot),
+    }
