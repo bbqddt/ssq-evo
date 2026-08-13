@@ -1,0 +1,12 @@
+{
+  "epochs": 5,
+  "pop": 18,
+  "k_light": 18,
+  "k_heavy": 6,
+  "seed": 20260813,
+  "oos_frac": 0.2,
+  "alert_q": 0.01,
+  "alert_oos_p": 0.01,
+  "http_port": 8088,
+  "schedule_hours": 6
+}

@@ -1,0 +1,53 @@
+# GitHub Actions —— ssq_evo 云端 7x24 结构搜索
+# 触发：每 6 小时（随机分钟避开整点） + 手动 workflow_dispatch
+# 机制：runner 每次全新 checkout -> 跑一轮 run_cycle -> 把数据/库/state 提交回仓库
+# 这样云端也具备持久记忆，与本地 Docker 容器互为冗余。
+name: SSQ Evo 7x24
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"      # 每 6 小时第 23 分（避开整点拥挤）
+  workflow_dispatch:            # 允许手动触发
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ssq-evo-cycle
+  cancel-in-progress: false
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout (含历史，便于回写)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install --no-cache-dir numpy scipy
+
+      - name: Run one evolution cycle
+        env:
+          DATA_DIR: ${{ github.workspace }}
+          TZ: Asia/Shanghai
+        run: python run_cycle.py
+
+      - name: Commit & push results back
+        run: |
+          git config user.name "ssq-evo-bot"
+          git config user.email "ssq-evo@users.noreply.github.com"
+          git add ssq_master.csv ssq_evo.db state.json config.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "no changes to commit"
+          else
+            git commit -m "auto: cycle $(date +%Y%m%d-%H%M%S) [skip ci]"
+            git push
+          fi

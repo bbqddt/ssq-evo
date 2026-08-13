@@ -1,0 +1,19 @@
+# docker-compose.yml —— ssq_evo 7x24 容器化部署
+# 数据全落 D 盘（D:\ssq_evo_data），容器重启不丢
+# 用法：docker compose up -d   （后台常驻）
+#      docker compose logs -f  （看日志）
+#      docker compose down     （停止）
+services:
+  ssq-evo:
+    build: .
+    container_name: ssq-evo-engine
+    restart: unless-stopped
+    ports:
+      - "8088:8088"   # 看板（serve.py 需要时启动）
+    volumes:
+      - D:/ssq_evo_data:/app/data   # 仅数据落 D 盘（不遮盖 /app 下的代码）
+    environment:
+      - TZ=Asia/Shanghai
+      - DATA_DIR=/app/data          # 告诉引擎所有输出写到 /app/data（= D:\ssq_evo_data）
+    # 常驻循环：daemon_loop.py 每 6h 跑一轮 run_cycle
+    command: ["python", "-u", "daemon_loop.py"]

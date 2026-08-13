@@ -1,0 +1,10 @@
+# 本地产物，不进仓库
+*.log
+__pycache__/
+venv/
+.env
+
+# Docker 本地部署相关（Dockerfile / docker-compose.yml 保留进仓库，供本地部署参考）
+
+# 数据文件保留（ssq_master.csv / ssq_evo.db / state.json / config.json）——
+# 云端 runner 靠它们持久记忆，勿忽略
