@@ -690,6 +690,14 @@ TEST_SUR_TYPE = {
     "sample_entropy": "shuffle",
     "multiscale_se":  "shuffle",
     "transfer_entropy": "shuffle",   # 双变量：打乱时间耦合（保留边际分布）
+    # 谱/自相关类检验：AAFT 仅随机化相位、会保留功率谱与自相关，对周期性/线性时序结构
+    # 完全失明(阳性对照证实 fft_peak 在 aaft 下 p=0.92，在 shuffle 下 p=0.005)。必须用
+    # shuffle(彻底打乱时间次序) 才有判别力——否则"无结构"结论可能是漏掉周期性的假阴性。
+    "fft_peak":       "shuffle",
+    "acf_max":        "shuffle",
+    "dfa_alpha":      "shuffle",
+    "mi_max":         "shuffle",
+    "corr_dim_slope": "shuffle",
 }
 
 # ---------------------------------------------------------------------------
