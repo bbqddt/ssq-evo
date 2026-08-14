@@ -1,9 +1,9 @@
 {
-  "updated": "2026-08-14 19:32:05",
+  "updated": "2026-08-14 20:31:24",
   "n_issues": 3490,
   "last_issue": "26093",
   "added": 0,
-  "cycle_id": 21,
+  "cycle_id": 22,
   "best_q": 0.6435643564356437,
   "best_sig": "red_recurrence_mean",
   "best_test": "fft_peak",
@@ -21,6 +21,11 @@
   "oos_cross_primary_type": "aaft",
   "oos_cross_primary": 0.0198,
   "oos_cross_consistent": true,
+  "oot_hit": 0.6689,
+  "oot_p": 0.005,
+  "oot_above": true,
+  "oot_n": 296,
+  "oot_rule": "rev",
   "alert": false,
   "n_eval": 117,
   "n_unique": 104,
@@ -376,6 +381,12 @@
   ],
   "history": [
     {
+      "ts": "2026-08-14 20:31:24",
+      "best_q": 0.6435643564356437,
+      "alert": false,
+      "coverage": 104
+    },
+    {
       "ts": "2026-08-14 19:32:05",
       "best_q": 0.6435643564356437,
       "alert": false,
@@ -505,6 +516,6 @@
   "self_check": {
     "score": 0,
     "warnings": [],
-    "ts": "2026-08-14 19:32:05"
+    "ts": "2026-08-14 20:31:24"
   }
 }
