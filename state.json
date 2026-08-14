@@ -1,356 +1,386 @@
 {
-  "updated": "2026-08-14 14:44:22",
+  "updated": "2026-08-14 16:04:24",
   "n_issues": 3490,
   "last_issue": "26093",
   "added": 0,
-  "cycle_id": 17,
-  "best_q": 0.7894736842105263,
-  "best_sig": "blue",
-  "best_test": "perm_entropy",
-  "best_p": 0.2857142857142857,
-  "best_stat": 3.154353938310497,
-  "best_z": -1.6377637568712318,
-  "oos_p": 0.9090909090909091,
-  "oos_acc": 0.6614,
-  "oos_acc_sur": 0.6651,
-  "oos_acc_p": 0.5875,
+  "cycle_id": 18,
+  "best_q": 0.6435643564356437,
+  "best_sig": "red_recurrence_mean",
+  "best_test": "fft_peak",
+  "best_p": 0.009900990099009901,
+  "best_stat": 0.005160586006012117,
+  "best_z": 3.3228978722975455,
+  "oos_p": 0.009900990099009901,
+  "oos_acc": 0.6854,
+  "oos_acc_sur": 0.5994,
+  "oos_acc_p": 0.005,
   "oos_acc_above": false,
-  "oos_acc_n": 691,
+  "oos_acc_n": 658,
+  "oos_cross_aaft": 0.0198,
+  "oos_cross_iaaft": 0.0099,
+  "oos_cross_primary_type": "aaft",
+  "oos_cross_primary": 0.0198,
+  "oos_cross_consistent": true,
   "alert": false,
-  "n_eval": 50,
-  "n_unique": 43,
-  "coverage": 43,
+  "n_eval": 117,
+  "n_unique": 104,
+  "coverage": 104,
   "elite_count": 12,
   "best_z_history": [
-    13.6333
+    3.3229
   ],
   "params": {
-    "epochs": 5,
-    "pop": 18,
-    "k_light": 18,
-    "k_heavy": 6,
+    "epochs": 7,
+    "pop": 32,
+    "k_light": 100,
+    "k_heavy": 60,
     "seed": 20260813,
     "oos_frac": 0.2,
     "alert_q": 0.01,
     "alert_oos_p": 0.01,
     "http_port": 8088,
-    "schedule_hours": 6
+    "schedule_hours": 0.25
   },
   "leaderboard": [
     {
-      "sig": "red_weighted",
-      "test": "rq_determinism",
-      "params": {
-        "_sig": {},
-        "_test": {
-          "m": 3,
-          "r_factor": 0
-        }
-      },
-      "p_raw": 0.14285714285714285,
-      "q": 0.7894736842105263,
-      "z": 6.355123552948493,
-      "stat": 0.008064516129032258,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "vector_mag",
-      "test": "perm_entropy",
-      "params": {
-        "_sig": {},
-        "_test": {
-          "order": 2,
-          "delay": 1
-        }
-      },
-      "p_raw": 0.14285714285714285,
-      "q": 0.7894736842105263,
-      "z": -29.230457867681054,
-      "stat": 0.6925679109639002,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "red_weighted",
-      "test": "rq_determinism",
-      "params": {
-        "_sig": {},
-        "_test": {
-          "m": 4,
-          "r_factor": 0
-        }
-      },
-      "p_raw": 0.14285714285714285,
-      "q": 0.7894736842105263,
-      "z": 13.633324672304408,
-      "stat": 0.008064516129032258,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "red_weighted",
-      "test": "rq_determinism",
-      "params": {
-        "_sig": {
-          "div": 31
-        },
-        "_test": {
-          "m": 4,
-          "r_factor": 0
-        }
-      },
-      "p_raw": 0.14285714285714285,
-      "q": 0.7894736842105263,
-      "z": 4.28438120736336,
-      "stat": 0.008064516129032258,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "red_weighted",
-      "test": "dfa_alpha",
-      "params": {
-        "_sig": {},
-        "_test": {}
-      },
-      "p_raw": 0.15789473684210525,
-      "q": 0.7894736842105263,
-      "z": 0.9738872966214271,
-      "stat": 0.4862552631753734,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "vector_mag",
-      "test": "acf_max",
-      "params": {
-        "_sig": {
-          "div": 34
-        },
-        "_test": {
-          "maxlag": 60
-        }
-      },
-      "p_raw": 0.21052631578947367,
-      "q": 0.7894736842105263,
-      "z": 0.9405185007031227,
-      "stat": 0.037330319834423364,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "red_span",
-      "test": "dfa_alpha",
-      "params": {
-        "_sig": {},
-        "_test": {}
-      },
-      "p_raw": 0.21052631578947367,
-      "q": 0.7894736842105263,
-      "z": 1.0850045667406043,
-      "stat": 0.4932882445554223,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "red_sum",
-      "test": "dfa_alpha",
-      "params": {
-        "_sig": {},
-        "_test": {}
-      },
-      "p_raw": 0.2631578947368421,
-      "q": 0.7894736842105263,
-      "z": 0.8601498453110931,
-      "stat": 0.4973707750920316,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "blue",
-      "test": "perm_entropy",
-      "params": {
-        "_sig": {},
-        "_test": {
-          "order": 4,
-          "delay": 1
-        }
-      },
-      "p_raw": 0.2857142857142857,
-      "q": 0.7894736842105263,
-      "z": -1.6377637568712318,
-      "stat": 3.154353938310497,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "vector_mag",
-      "test": "perm_entropy",
-      "params": {
-        "_sig": {
-          "div": 36
-        },
-        "_test": {
-          "order": 5,
-          "delay": 2
-        }
-      },
-      "p_raw": 0.2857142857142857,
-      "q": 0.7894736842105263,
-      "z": -1.2666284364944365,
-      "stat": 4.756430466359244,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "red_span",
-      "test": "rq_determinism",
-      "params": {
-        "_sig": {},
-        "_test": {
-          "m": 4,
-          "r_factor": 0
-        }
-      },
-      "p_raw": 0.2857142857142857,
-      "q": 0.7894736842105263,
-      "z": 0.7873425344138663,
-      "stat": 0.056734517106972714,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "red_weighted",
-      "test": "perm_entropy",
-      "params": {
-        "_sig": {},
-        "_test": {
-          "order": 2,
-          "delay": 1
-        }
-      },
-      "p_raw": 0.2857142857142857,
-      "q": 0.7894736842105263,
-      "z": 0.3181335272608023,
-      "stat": 0.6930625089163176,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "blue",
-      "test": "perm_entropy",
-      "params": {
-        "_sig": {},
-        "_test": {
-          "order": 4,
-          "delay": 3
-        }
-      },
-      "p_raw": 0.2857142857142857,
-      "q": 0.7894736842105263,
-      "z": -1.7948948714198176,
-      "stat": 3.1520237115352225,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "blue",
-      "test": "dfa_alpha",
-      "params": {
-        "_sig": {},
-        "_test": {}
-      },
-      "p_raw": 0.3157894736842105,
-      "q": 0.7894736842105263,
-      "z": 0.633651599347121,
-      "stat": 0.5048949630484693,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "complex_field",
+      "sig": "red_recurrence_mean",
       "test": "fft_peak",
       "params": {
-        "_sig": {
-          "div": 30
-        },
-        "_test": {}
-      },
-      "p_raw": 0.3157894736842105,
-      "q": 0.7894736842105263,
-      "z": 0.9486448671500731,
-      "stat": 0.005473964962155806,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "complex_field",
-      "test": "acf_max",
-      "params": {
         "_sig": {},
-        "_test": {
-          "maxlag": 40
-        }
+        "_test": {},
+        "_reorder": "identity"
       },
-      "p_raw": 0.3684210526315789,
-      "q": 0.8270676691729324,
-      "z": 0.33003298654876484,
-      "stat": 0.03806918673550991,
+      "p_raw": 0.009900990099009901,
+      "q": 0.6435643564356437,
+      "z": 3.3228978722975455,
+      "stat": 0.005160586006012117,
       "verdict": "随机区间"
     },
     {
-      "sig": "red_weighted",
-      "test": "acf_max",
-      "params": {
-        "_sig": {},
-        "_test": {
-          "maxlag": 40
-        }
-      },
-      "p_raw": 0.42105263157894735,
-      "q": 0.8270676691729324,
-      "z": 0.264548541803079,
-      "stat": 0.04129352430597814,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "red_sum",
-      "test": "perm_entropy",
-      "params": {
-        "_sig": {},
-        "_test": {
-          "order": 2,
-          "delay": 1
-        }
-      },
-      "p_raw": 0.42857142857142855,
-      "q": 0.8270676691729324,
-      "z": -0.1684980023097872,
-      "stat": 0.692926222622946,
-      "verdict": "随机区间"
-    },
-    {
-      "sig": "red_mean",
+      "sig": "red_sum_block",
       "test": "lyap",
       "params": {
         "_sig": {},
         "_test": {
-          "m": 3,
-          "tau": 1
-        }
+          "m": 4,
+          "tau": 3
+        },
+        "_reorder": "identity"
       },
-      "p_raw": 0.42857142857142855,
-      "q": 0.8270676691729324,
-      "z": 0.27190368128387166,
-      "stat": 1.3345149573134043,
+      "p_raw": 0.01639344262295082,
+      "q": 0.6435643564356437,
+      "z": 2.249220060511146,
+      "stat": 0.8489772874519849,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "blue_resid",
+      "test": "transfer_entropy",
+      "params": {
+        "_sig": {},
+        "_test": {
+          "k_history": 3,
+          "bins": 8
+        },
+        "_reorder": "block"
+      },
+      "p_raw": 0.03278688524590164,
+      "q": 0.6435643564356437,
+      "z": 2.3276941362646117,
+      "stat": 1.4367261833967704,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "blue_resid",
+      "test": "lyap",
+      "params": {
+        "_sig": {},
+        "_test": {
+          "m": 4,
+          "tau": 1
+        },
+        "_reorder": "identity"
+      },
+      "p_raw": 0.03278688524590164,
+      "q": 0.6435643564356437,
+      "z": 1.9839059752220034,
+      "stat": 1.0100546223459552,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "red_consecutive",
+      "test": "multiscale_se",
+      "params": {
+        "_sig": {},
+        "_test": {
+          "m": 2,
+          "r_factor": 0,
+          "tau_max": 4
+        },
+        "_reorder": "identity"
+      },
+      "p_raw": 0.04918032786885246,
+      "q": 0.6435643564356437,
+      "z": 1.6764521706051283,
+      "stat": 5.3222813740540555,
       "verdict": "随机区间"
     },
     {
       "sig": "vector_mag",
-      "test": "mi_max",
+      "test": "transfer_entropy",
       "params": {
         "_sig": {
           "div": 35
         },
         "_test": {
-          "maxlag": 11,
-          "bins": 20
-        }
+          "k_history": 3,
+          "bins": 8
+        },
+        "_reorder": "block"
       },
-      "p_raw": 0.47368421052631576,
-      "q": 0.8270676691729324,
-      "z": -0.3961360224019499,
-      "stat": 0.0777898535302963,
+      "p_raw": 0.04918032786885246,
+      "q": 0.6435643564356437,
+      "z": 1.8622411675185844,
+      "stat": 1.4112978830449856,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "red_sum",
+      "test": "transfer_entropy",
+      "params": {
+        "_sig": {},
+        "_test": {
+          "k_history": 3,
+          "bins": 10
+        },
+        "_reorder": "block"
+      },
+      "p_raw": 0.04918032786885246,
+      "q": 0.6435643564356437,
+      "z": 1.6065027426340732,
+      "stat": 1.1699897836130375,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "red_gap_mean",
+      "test": "mi_max",
+      "params": {
+        "_sig": {},
+        "_test": {
+          "maxlag": 14,
+          "bins": 7
+        },
+        "_reorder": "reverse"
+      },
+      "p_raw": 0.04950495049504951,
+      "q": 0.6435643564356437,
+      "z": 1.6769198787556248,
+      "stat": 0.01309144487002508,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "red_zone_entropy",
+      "test": "dfa_alpha",
+      "params": {
+        "_sig": {},
+        "_test": {},
+        "_reorder": "block"
+      },
+      "p_raw": 0.04950495049504951,
+      "q": 0.6435643564356437,
+      "z": 1.8342615386034615,
+      "stat": 0.5658619637891279,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "red_energy",
+      "test": "lyap",
+      "params": {
+        "_sig": {},
+        "_test": {
+          "m": 4,
+          "tau": 1
+        },
+        "_reorder": "identity"
+      },
+      "p_raw": 0.06557377049180328,
+      "q": 0.6974664679582713,
+      "z": 1.5457796909896677,
+      "stat": 0.8386551863290516,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "vector_mag",
+      "test": "transfer_entropy",
+      "params": {
+        "_sig": {
+          "div": 35
+        },
+        "_test": {
+          "k_history": 3,
+          "bins": 9
+        },
+        "_reorder": "block"
+      },
+      "p_raw": 0.06557377049180328,
+      "q": 0.6974664679582713,
+      "z": 1.2066113127987865,
+      "stat": 1.2833788907429695,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "red_gap_max",
+      "test": "dfa_alpha",
+      "params": {
+        "_sig": {},
+        "_test": {},
+        "_reorder": "identity"
+      },
+      "p_raw": 0.07920792079207921,
+      "q": 0.7377049180327868,
+      "z": 1.4445453461250903,
+      "stat": 0.5328697607666631,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "red_weighted",
+      "test": "lyap",
+      "params": {
+        "_sig": {},
+        "_test": {
+          "m": 4,
+          "tau": 3
+        },
+        "_reorder": "identity"
+      },
+      "p_raw": 0.09836065573770492,
+      "q": 0.7446958981612447,
+      "z": 1.3586622448044108,
+      "stat": 0.8487591333461587,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "blue_resid",
+      "test": "transfer_entropy",
+      "params": {
+        "_sig": {},
+        "_test": {
+          "k_history": 3,
+          "bins": 9
+        },
+        "_reorder": "identity"
+      },
+      "p_raw": 0.09836065573770492,
+      "q": 0.7446958981612447,
+      "z": 1.4554324867982122,
+      "stat": 1.296520092884763,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "red_sum",
+      "test": "multiscale_se",
+      "params": {
+        "_sig": {},
+        "_test": {
+          "m": 2,
+          "r_factor": 0,
+          "tau_max": 4
+        },
+        "_reorder": "reverse"
+      },
+      "p_raw": 0.11475409836065574,
+      "q": 0.7446958981612447,
+      "z": 1.617736866688801,
+      "stat": 2.1291179351682823,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "red_zone_entropy",
+      "test": "fft_peak",
+      "params": {
+        "_sig": {},
+        "_test": {},
+        "_reorder": "reverse"
+      },
+      "p_raw": 0.1188118811881188,
+      "q": 0.7446958981612447,
+      "z": 1.1191174059651645,
+      "stat": 0.007237118719999374,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "red_energy",
+      "test": "transfer_entropy",
+      "params": {
+        "_sig": {},
+        "_test": {
+          "k_history": 3,
+          "bins": 8
+        },
+        "_reorder": "identity"
+      },
+      "p_raw": 0.14754098360655737,
+      "q": 0.7446958981612447,
+      "z": 0.9933167236871142,
+      "stat": 1.4061915913076015,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "red_sum",
+      "test": "transfer_entropy",
+      "params": {
+        "_sig": {},
+        "_test": {
+          "k_history": 3,
+          "bins": 8
+        },
+        "_reorder": "block"
+      },
+      "p_raw": 0.14754098360655737,
+      "q": 0.7446958981612447,
+      "z": 1.0542821882058082,
+      "stat": 1.4156840992284345,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "red_weighted",
+      "test": "dfa_alpha",
+      "params": {
+        "_sig": {},
+        "_test": {},
+        "_reorder": "identity"
+      },
+      "p_raw": 0.1485148514851485,
+      "q": 0.7446958981612447,
+      "z": 1.0652627845731353,
+      "stat": 0.4862552631753729,
+      "verdict": "随机区间"
+    },
+    {
+      "sig": "blue_resid",
+      "test": "transfer_entropy",
+      "params": {
+        "_sig": {},
+        "_test": {
+          "k_history": 3,
+          "bins": 10
+        },
+        "_reorder": "block"
+      },
+      "p_raw": 0.16393442622950818,
+      "q": 0.7446958981612447,
+      "z": 1.2014330857063606,
+      "stat": 1.162597555405541,
       "verdict": "随机区间"
     }
   ],
   "history": [
+    {
+      "ts": "2026-08-14 16:04:24",
+      "best_q": 0.6435643564356437,
+      "alert": false,
+      "coverage": 104
+    },
     {
       "ts": "2026-08-14 14:44:22",
       "best_q": 0.7894736842105263,
@@ -453,5 +483,10 @@
       "alert": false,
       "coverage": null
     }
-  ]
+  ],
+  "self_check": {
+    "score": 0,
+    "warnings": [],
+    "ts": "2026-08-14 16:04:24"
+  }
 }
