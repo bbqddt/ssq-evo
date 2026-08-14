@@ -1324,6 +1324,99 @@ def oos_accuracy(ev, reds, blues, rng, frac=0.2, w=60, k_sur=40):
     }
 
 
+def out_of_time(ev, reds, blues, rng, train_frac=0.85, w=60, k_sur=40):
+    """Out-of-Time (OOT) 盲测 —— 预测领域防过拟合的终极诚信闸门。
+
+    与 oos_accuracy 的区别：
+    - oos_accuracy 用 100% 数据构造序列，在末尾 20% 抽测，而候选正是在「同一段末尾」反复被
+      进化挑出(被反复看见的 OOS)，并非纯前瞻。
+    - OOT 明确三段切分：
+        [0, cut)        训练段 —— 在此冻结候选的读取规则(训练段择优，与真实+替代一致)
+        [cut, holdout)  冻结段 —— 进化时看不到(候选来自训练段)，但规则已冻结 → 作"验证"
+        [holdout, N)    盲测段 —— 候选/规则均于进化时不可见，最后才用冻结规则盲打
+      这里取 holdout 之后的"真正未来"作盲测，是进化搜索 10000+ 公式的最后一道诚实闸门。
+
+    流程：
+    1. 在训练段 cut 处构造序列 x(冻结候选公式 + 演化参数)；
+    2. 在训练段于规则集选最优读取规则 best_rule(与 oos_accuracy 同校准逻辑)；
+    3. 把 best_rule 冻结，直接在盲测段 [holdout, N) 计算因果命中率(绝不偷看未来)；
+    4. 用盲测段自身的替代分布(shuffle/aaft)校准"高于随机"的百分位 p_random(诚实)。
+
+    返回 dict 或 None(数据不足)。字段: hit_rate, p_random, above_random, n, best_rule,
+    holdout_n(盲测段长度)。"""
+    if len(reds) < 200:
+        return None
+    reorder = (ev.get("params") or {}).get("_reorder", "identity")
+    if reorder and reorder != "identity":
+        reds, blues = apply_reorder(reds, blues, reorder, rng)
+    sig = ev["sig"]
+    try:
+        x = _build_x(sig, reds, blues, ev.get("params"))
+    except Exception:
+        return None
+    if x is None:
+        return None
+    n = x.shape[0]
+    cut = int(n * train_frac)
+    holdout = int(n * (train_frac + (1 - train_frac) * 0.4))  # 后 60% 中的后 40% 为盲测
+    if cut < w + 5 or (holdout - cut) < 40 or (n - holdout) < 40:
+        return None
+    rules = _rules_from_genome(ev)
+    # 1) 训练段冻结最优读取规则
+    s = np.asarray(x, float)
+    nn = len(s)
+    inc = np.diff(s)
+    actual = np.sign(inc)
+    tr_idx = np.arange(1, max(2, cut))
+    best_rule, best_score = None, -1.0
+    for rule in rules:
+        pred = _pred_from_rule(s, rule[0], rule[1], nn)
+        pv = pred[tr_idx]; av = actual[tr_idx]
+        v = (pv != 0) & (av != 0)
+        sc = float(np.mean(pv[v] == av[v])) if v.sum() >= 30 else 0.5
+        if sc > best_score:
+            best_score, best_rule = sc, rule
+    if best_rule is None:
+        return None
+    # 2) 盲测段命中率(冻结规则，因果，不偷看未来)
+    os_idx = np.arange(holdout, nn - 1)
+    if os_idx.size < 30:
+        return None
+    pv = _pred_from_rule(s, best_rule[0], best_rule[1], nn)[os_idx]
+    av = actual[os_idx]
+    valid = (pv != 0) & (av != 0)
+    if valid.sum() < 30:
+        return None
+    hr = float(np.mean(pv[valid] == av[valid]))
+    # 3) 盲测段替代分布校准(零假设用该检验对应 sur_type，与结构检验一致)
+    try:
+        surs = _gen_surrogates(s, int(k_sur), rng, TEST_SUR_TYPE.get(ev["test"], "aaft"))
+    except Exception:
+        surs = np.empty((0, n))
+    hr_sur = []
+    for i in range(surs.shape[0] if surs.ndim == 2 else 0):
+        p = _pred_from_rule(surs[i], best_rule[0], best_rule[1], nn)[os_idx]
+        v = (p != 0) & (av != 0)
+        if v.sum() >= 30:
+            hr_sur.append(float(np.mean(p[v] == av[v])))
+    hr_sur = np.array(hr_sur) if hr_sur else np.empty(0)
+    if hr_sur.size == 0:
+        return None
+    p_random = float((hr_sur >= hr).mean() + 0.5 / hr_sur.size)
+    p_random = min(1.0, max(0.0, p_random))
+    return {
+        "hit_rate": hr,
+        "sur_mean": float(hr_sur.mean()),
+        "sur_std": float(hr_sur.std(ddof=0)) if hr_sur.size > 1 else 0.0,
+        "p_random": p_random,
+        "above_random": bool(p_random <= 0.05),
+        "k_sur": int(hr_sur.size),
+        "n": int(valid.sum()),
+        "best_rule": (best_rule[0] if best_rule else None),
+        "holdout_n": int(os_idx.size),
+    }
+
+
 def cross_validate_null(top, reds, blues, rng, frac=0.2, k_sur=25):
     """多零假设交叉验证：在「该检验的正确零假设(primary: 确定性类=shuffle, 其余=aaft)」
     与 AAFT、IAAFT、**TWIN** 四套零假设下分别重算结构 p 值。

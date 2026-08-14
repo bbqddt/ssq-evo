@@ -129,6 +129,13 @@ def build(s):
     oos_ok = (bool(s.get("oos_acc_above")) and q < FDR_Q)
     cross_ok = consistent
 
+    # Out-of-Time (OOT) 盲测：候选来自训练段，冻结规则盲打真正未来
+    oot_hit = s.get("oot_hit", 0)
+    oot_p = s.get("oot_p", 1.0)
+    oot_n = s.get("oot_n", 0)
+    oot_above = bool(s.get("oot_above"))
+    oot_ok = (oot_above and q < FDR_Q)
+
     three_cars = f"""
     <table class="cars">
       <tr><th>车辆</th><th>角色</th><th>模式</th><th>状态</th></tr>
@@ -203,6 +210,7 @@ def build(s):
     {kpi_card("结构 FDR (best_q)", _num(q,4), f"阈值 {FDR_Q} / alert {ALERT_Q}", q_color, ok=(q<FDR_Q))}
     {kpi_card("coverage (评估算子数)", str(s.get('coverage','?')), f"精英 {s.get('elite_count','?')} · 唯一 {s.get('n_unique','?')}", "#4ea1ff")}
     {kpi_card("样本外方向准确率", _num(oos_acc,3), f"随机基线 {_num(oos_sur,3)} · p={_num(oos_p,4)}", "#ffb454", ok=oos_ok)}
+    {kpi_card("OOT 盲测命中率", _num(oot_hit,3), f"冻结规则盲打未来 · p={_num(oot_p,4)} · n={oot_n} (需结构FDR显著方作数)", "#ff8fab", ok=oot_ok)}
     {kpi_card("零假设交叉一致", "是" if consistent else "否", f"primary({_esc(cpt)})={_num(cp,4) if cp is not None else '—'}", "#3ddc84" if consistent else "#ff6b6b", ok=cross_ok)}
     {kpi_card("ALERT", "触发" if alert else "未触发", f"门槛 q&lt;{ALERT_Q} & OOS p&lt;{OOS_P}", "#3ddc84" if alert else "#ff6b6b", ok=alert)}
     {kpi_card("前瞻样本", f"{n_issues} 期", f"最新 {_esc(last_issue)} · 本轮新增 {added}", "#a78bfa")}
@@ -245,7 +253,9 @@ def build(s):
   </div>
 
   <div class="note">本看板由 run_cycle 每轮自动生成，经 CloudStudio 部署到腾讯云。全部统计闸门
-    (BH-FDR 多重比较校正、AAFT/IAAFT/shuffle 三零假设交叉、样本外验证) 均为预注册，不人为调高显著性。</div>
+    (BH-FDR 多重比较校正、AAFT/IAAFT/shuffle/twin 四零假设交叉、样本外验证、Out-of-Time 盲测)
+    均为预注册，不人为调高显著性。OOT 盲测将演化(前85%训练)与盲测(末段未来)彻底隔离，
+    是进化搜索防过拟合的终极诚信闸门。</div>
 </div></body></html>"""
     return html_doc
 

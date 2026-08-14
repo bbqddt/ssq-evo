@@ -63,6 +63,20 @@ def self_check(state, acc, cfg):
             warns.append("基因组参数异常: read=osc 且 k<=1(平凡解)，已强制 k>=2")
             score += 3
 
+    # 1b) OOT 盲测平凡解检测（同样防数据泄露指纹）
+    oot = None
+    oot_p = state.get("oot_p")
+    oot_hit = state.get("oot_hit")
+    oot_n = state.get("oot_n") or 0
+    if oot_p is not None and oot_hit is not None:
+        if oot_hit >= 0.99 and oot_p >= 0.95:
+            warns.append(
+                "OOT 盲测平凡解: hit_rate≈1.0 & p≈1.0 —— 检查是否在盲测段泄露了未来信息")
+            score += 3
+        if oot_n < 30:
+            warns.append(f"OOT 盲测样本量过小(n={oot_n}<30)，统计量不足")
+            score += 1
+
     # 2) 配置一致性（源 vs 运行时）
     src_cfg = os.path.join(HERE, "config.json")
     run_cfg = os.path.join(DATA_DIR, "config.json")
@@ -218,10 +232,16 @@ def main():
     if lb_items:
         acc = E.oos_accuracy(top, reds, blues, rng, frac=cfg["oos_frac"], k_sur=cfg["k_light"])
 
-    # 5c. 多零假设交叉验证（AAFT vs IAAFT）：最优候选是否在两套零假设下都显著？
+    # 5c. 多零假设交叉验证（AAFT vs IAAFT vs TWIN）：最优候选是否在三套零假设下都显著？
     cross = None
     if lb_items:
         cross = E.cross_validate_null(top, reds, blues, rng, frac=cfg["oos_frac"], k_sur=cfg["k_light"])
+
+    # 5d. Out-of-Time (OOT) 盲测：候选来自训练段(前85%)，用冻结规则盲打真正未来(末段)
+    # 这是进化搜索 10000+ 公式的最终诚信闸门——直接回答"公式能预测真实未来吗"。
+    oot = None
+    if lb_items:
+        oot = E.out_of_time(top, reds, blues, rng, train_frac=0.85, k_sur=cfg["k_light"])
 
     alert = (best_q < cfg["alert_q"]) and (oos_p is not None) and (oos_p < cfg["alert_oos_p"])
     # 诚实闸门：方向准确率"高于随机"必须先过结构 FDR 显著(best_q<0.05)，否则只是
@@ -260,6 +280,11 @@ def main():
         "oos_cross_aaft": (round(cross["aaft"], 4) if cross and cross.get("aaft") is not None else None),
         "oos_cross_iaaft": (round(cross["iaaft"], 4) if cross and cross.get("iaaft") is not None else None),
         "oos_cross_consistent": (bool(cross["consistent"]) if cross else False),
+        "oot_hit": (round(oot["hit_rate"], 4) if oot else None),
+        "oot_p": (round(oot["p_random"], 4) if oot else None),
+        "oot_above": bool(oot and oot["above_random"]),
+        "oot_n": (oot["n"] if oot else 0),
+        "oot_rule": (oot["best_rule"] if oot else None),
         "alert": alert, "coverage": fr["coverage"],
         "note": ("候选结构! 需人工复核" if alert else "无超越随机的可提取结构 (null)"),
     }
@@ -285,6 +310,11 @@ def main():
         "oos_cross_primary_type": (cross.get("primary_type") if cross else None),
         "oos_cross_primary": (round(cross["primary"], 4) if cross and cross.get("primary") is not None else None),
         "oos_cross_consistent": (bool(cross["consistent"]) if cross else False),
+        "oot_hit": (round(oot["hit_rate"], 4) if oot else None),
+        "oot_p": (round(oot["p_random"], 4) if oot else None),
+        "oot_above": bool(oot and oot["above_random"]),
+        "oot_n": (oot["n"] if oot else 0),
+        "oot_rule": (oot["best_rule"] if oot else None),
         "alert": bool(alert),
         "n_eval": len(all_evals), "n_unique": len(leaderboard),
         "coverage": fr["coverage"], "elite_count": len(fr["elites"]),
