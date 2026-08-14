@@ -78,12 +78,23 @@ def acquire_lock():
         return
 
 def load_cfg():
-    try:
-        return json.load(open(os.path.join(HERE, "config.json"), encoding="utf-8"))
-    except Exception:
-        return {"schedule_hours": 0.25}   # 默认 15 分钟；可用 CYCLE_MINUTES 环境变量覆盖
+    # 优先 DATA_DIR(运行时配置，Docker 挂载卷)；回退 HERE(代码目录)。
+    # 这样本机与容器共用同一份 config(D:\ssq_evo_data\config.json)，避免两份配置漂移。
+    for base in (DATA_DIR, HERE):
+        try:
+            return json.load(open(os.path.join(base, "config.json"), encoding="utf-8"))
+        except Exception:
+            continue
+    return {"schedule_hours": 0.25}   # 默认 15 分钟；可用 CYCLE_MINUTES 环境变量覆盖
 
 def main():
+    # 日志落盘（追加），便于监控；子进程 run_cycle 继承此 stdout
+    try:
+        _lf = open(os.path.join(DATA_DIR, "daemon.log"), "a", encoding="utf-8")
+        sys.stdout = _lf
+        sys.stderr = _lf
+    except Exception:
+        pass
     acquire_lock()
     cfg = load_cfg()
     # 优先环境变量 CYCLE_MINUTES（分钟）；0 或负数 = 连续模式(仅 60s 冷却)

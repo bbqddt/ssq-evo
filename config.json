@@ -1,12 +1,12 @@
 {
-  "epochs": 5,
-  "pop": 18,
-  "k_light": 18,
-  "k_heavy": 6,
+  "epochs": 7,
+  "pop": 32,
+  "k_light": 100,
+  "k_heavy": 60,
   "seed": 20260813,
   "oos_frac": 0.2,
   "alert_q": 0.01,
   "alert_oos_p": 0.01,
   "http_port": 8088,
-  "schedule_hours": 6
+  "schedule_hours": 0.25
 }
