@@ -26,6 +26,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Sync latest main before running (防 bot 回写旧引擎覆盖修复)
+        # 关键：bot 每次都先 rebase 到最新 main（含用户推送的引擎修复），再在其上叠加数据提交。
+        # 否则若 bot 在用户 push 前已 dispatch 并基于旧引擎 checkout，其 git push 会把修复冲掉。
+        run: |
+          git config user.name "ssq-evo-bot"
+          git config user.email "ssq-evo@users.noreply.github.com"
+          git pull --rebase origin main || true
+
       - name: Setup Python 3.13
         uses: actions/setup-python@v5
         with:

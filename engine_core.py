@@ -833,6 +833,8 @@ def _gen_surrogates(x, k, rng, sur_type):
         u = rng.random((k, n))
         order = np.argsort(u, axis=1)
         return x[order].astype(float)
+    if sur_type == "twin":
+        return twin_surrogate(x, k, rng)
     # random-phase (amplitude-adjusted) surrogate
     ph = rng.uniform(0, 2 * np.pi, (k, M))
     Y = np.fft.irfft(mag * np.exp(1j * ph), n, axis=1)
@@ -860,6 +862,60 @@ def _iaaft_batch(x, k, rng, iters=5):
             y = np.fft.irfft(mag * np.exp(1j * np.angle(Yr)), n)
         ranks = np.argsort(np.argsort(y))
         out[j] = xs[ranks]
+    return out.astype(float)
+
+
+def _embed(x, m, tau):
+    """相空间延迟重构：返回 (N, m) 嵌入矩阵，N = len(x)-(m-1)*tau。"""
+    x = np.asarray(x, float)
+    N = len(x) - (m - 1) * tau
+    if N <= 0:
+        return None
+    emb = np.empty((N, m))
+    for j in range(m):
+        emb[:, j] = x[j * tau:j * tau + N]
+    emb = (emb - emb.mean(0)) / (emb.std(0) + 1e-9)
+    return emb
+
+
+def twin_surrogate(x, k, rng, m=3, tau=1, theiler=1, n_neigh=10):
+    """Twin surrogates (Thiel et al. 2006) —— 确定性结构检验的金标准零假设。
+
+    与 shuffle(破坏一切时序)/AAFT(仅破坏非线性、保留谱)不同，twin 保留**相空间递归结构**
+    （非线性确定性动力学的指纹），只破坏时间次序。做法是：把序列嵌入相空间，对每个点找
+    其最近邻(theiler 窗排除时间近邻)，再从随机起点沿"最近邻链"游走生成新序列——相邻点
+    在相空间上递归相关，但时间次序被彻底打乱。
+
+    含义：若某统计量在 shuffle/AAFT 下显著、却在 twin 下不显著 → 其"结构"只是线性/递归伪迹
+    （可由确定性动力学解释），并非真·例外；只有连 twin 都扛住的，才是真·非平凡结构。
+    因此 twin 是比 shuffle 更严的零假设，把它纳入 cross_validate 只会让结论更保守、更诚实。
+
+    返回 shape (k, n)。序列过短(不足以嵌入)时退化为 shuffle 以保证不崩溃。
+    """
+    x = np.asarray(x, float); n = len(x)
+    if n < (m - 1) * tau + 3:
+        return np.tile(rng.permutation(x), (k, 1)).astype(float)
+    emb = _embed(x, m, tau)
+    if emb is None:
+        return np.tile(rng.permutation(x), (k, 1)).astype(float)
+    N = emb.shape[0]
+    # 逐行算欧氏距离，找出每个点的最近邻（排除自身 + theiler 时间窗）
+    neigh = np.empty((N, n_neigh), dtype=int)
+    for i in range(N):
+        d = np.sum((emb - emb[i]) ** 2, axis=1)
+        d[i] = np.inf
+        lo, hi = max(0, i - theiler), min(N, i + theiler + 1)
+        d[lo:hi] = np.inf
+        neigh[i] = np.argpartition(d, n_neigh)[:n_neigh]
+    out = np.empty((k, n))
+    for s in range(k):
+        cur = int(rng.integers(N))
+        seq = [cur]
+        for _ in range(n - 1):
+            twins = neigh[cur]
+            cur = int(twins[rng.integers(len(twins))])
+            seq.append(cur)
+        out[s] = x[np.asarray(seq)]
     return out.astype(float)
 
 
@@ -925,7 +981,7 @@ def evaluate(sig_name, test_name, reds, blues, rng, k_sur, sur_type=None, params
     if not math.isfinite(real):
         return None
     n = len(x)
-    st = sur_type if sur_type in ("aaft", "iaaft", "shuffle") else TEST_SUR_TYPE.get(test_name, "aaft")
+    st = sur_type if sur_type in ("aaft", "iaaft", "shuffle", "twin") else TEST_SUR_TYPE.get(test_name, "aaft")
 
     # --- surrogate 生成（双变量：联合打乱时间索引，保留边际分布但破坏耦合）---
     svals = []
@@ -1270,10 +1326,16 @@ def oos_accuracy(ev, reds, blues, rng, frac=0.2, w=60, k_sur=40):
 
 def cross_validate_null(top, reds, blues, rng, frac=0.2, k_sur=25):
     """多零假设交叉验证：在「该检验的正确零假设(primary: 确定性类=shuffle, 其余=aaft)」
-    与 AAFT、IAAFT 三套零假设下分别重算结构 p 值。
-    若某公式在三套零假设下都显著(p<0.05)，结论才更硬——排除'零假设设定不当'
-    导致的假阳(例如用偏松的 AAFT 当基线而 shuffle 下不成立)。
-    返回 dict: {primary_type, primary, aaft, iaaft, consistent}。"""
+    与 AAFT、IAAFT、**TWIN** 四套零假设下分别重算结构 p 值。
+    若某公式在四套零假设下都显著(p<0.05)，结论才更硬——排除'零假设设定不当'
+    导致的假阳(例如用偏松的 AAFT 当基线而 shuffle 下不成立；或 shuffle 下显著但
+    twin 下不显著→只是确定性递归伪迹而非真·结构)。
+
+    twin 仅对「确定性/复杂度类」(primary=shuffle) 的**单变量**检验启用——它是这类检验的
+    金标准零假设(保留相空间递归结构，仅破坏时间次序)；双变量检验(transfer_entropy)的
+    时间耦合破坏已由 shuffle 处理，不参与 twin。
+
+    返回 dict: {primary_type, primary, aaft, iaaft, twin(可选), consistent}。"""
     test = top["test"]
     primary_type = TEST_SUR_TYPE.get(test, "aaft")
     res = {"primary_type": primary_type}
@@ -1289,9 +1351,20 @@ def cross_validate_null(top, reds, blues, rng, frac=0.2, k_sur=25):
             ev = None
         if ev is not None:
             res[st] = float(ev["p_raw"])
+    # twin 金标准零假设：仅确定性类单变量检验
+    if primary_type == "shuffle" and test not in BIVARIATE_TESTS:
+        try:
+            ev_t = evaluate(top["sig"], top["test"], reds, blues, rng, k_sur,
+                            sur_type="twin", params=top.get("params"))
+            if ev_t is not None:
+                res["twin"] = float(ev_t["p_raw"])
+        except Exception:
+            pass
     res["primary"] = res.get(primary_type)
+    # consistent 要求：primary/aaft/iaaft 全显著；若算了 twin 也必须显著（更严）
+    vals = [res.get("primary"), res.get("aaft"), res.get("iaaft")]
+    if res.get("twin") is not None:
+        vals.append(res["twin"])
     res["consistent"] = bool(
-        res.get("primary") is not None and res.get("aaft") is not None
-        and res.get("iaaft") is not None
-        and min(res["primary"], res["aaft"], res["iaaft"]) < 0.05)
+        all(v is not None for v in vals) and min(vals) < 0.05)
     return res

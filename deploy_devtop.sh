@@ -9,7 +9,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/app/ssq_evo}"
 DATA_DIR="${DATA_DIR:-/app/ssq_evo_data}"
-REPO="https://github.com/bbqddt/ssq-evo.git"
+REPO="https://ghp.ci/https://github.com/bbqddt/ssq-evo.git"
 IMG="ssq-evo-cloud"
 CTN="ssq-evo-cloud"
 
@@ -43,7 +43,11 @@ if ! grep -q 'transfer_entropy' engine_core.py 2>/dev/null; then
   echo "✗ 危险：克隆到的 engine_core.py 不含转移熵检验（旧版本）。中止。"
   exit 1
 fi
-echo "✓ 引擎版本校验通过（含 osc 修复 + 转移熵）"
+if ! grep -q 'def twin_surrogate' engine_core.py 2>/dev/null; then
+  echo "✗ 危险：克隆到的 engine_core.py 不含 twin surrogates 金标准零假设（旧版本）。中止。"
+  exit 1
+fi
+echo "✓ 引擎版本校验通过（含 osc 修复 + 转移熵 + twin surrogates）"
 
 # 3. 构建镜像（DevTop 的 docker 即宿主 docker，直接可用）
 echo "→ 构建镜像 $IMG ..."
