@@ -1,9 +1,9 @@
 {
-  "updated": "2026-08-14 16:04:24",
+  "updated": "2026-08-14 17:30:00",
   "n_issues": 3490,
   "last_issue": "26093",
   "added": 0,
-  "cycle_id": 18,
+  "cycle_id": 19,
   "best_q": 0.6435643564356437,
   "best_sig": "red_recurrence_mean",
   "best_test": "fft_peak",
@@ -376,6 +376,12 @@
   ],
   "history": [
     {
+      "ts": "2026-08-14 17:30:00",
+      "best_q": 0.6435643564356437,
+      "alert": false,
+      "coverage": 104
+    },
+    {
       "ts": "2026-08-14 16:04:24",
       "best_q": 0.6435643564356437,
       "alert": false,
@@ -487,6 +493,6 @@
   "self_check": {
     "score": 0,
     "warnings": [],
-    "ts": "2026-08-14 16:04:24"
+    "ts": "2026-08-14 17:30:00"
   }
 }
