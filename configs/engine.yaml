@@ -26,7 +26,7 @@ engine:
     enabled: true      # #40 增量评估缓存：同(基因组,数据集指纹)复用，严格等价不改统计
     path: eval_cache.json  # 缓存文件(容器 DATA_DIR 下)
 
-  # #39 可微 Formula（实验性，默认关闭）：发现段数值优化连续超参生成候选，
+  # #39 可微 Formula（实验性，当前已启用）：发现段数值优化连续超参生成候选，
   # 冻结后经统一诚信闸门(BH-FDR + OOT + 交叉零假设 + #41 发现/确认分离)重判，不绕过。
   # 仅当演化/谱扫描覆盖不足、且接受额外算力开销时启用。
   # 注：配置加载器把嵌套 dict 扁平化为「叶子键」（不保留父级名），故叶子键须带
@@ -37,3 +37,11 @@ engine:
     diff_formula_k_sur: 25           # 发现段优化用 surrogate 数（z 分数目标不触地板，无需过高）
     diff_formula_n_steps: 12         # 局部坐标精炼步数
     diff_formula_wf_k_sur: 25        # 模块内确认闸门 surrogate 数（仅 confirm=True 时生效；run_cycle 默认 confirm=False 走统一闸门）
+
+  # 红队自审（诚实守护，默认关闭）：只读对抗审计器，挑自己结论的毛病
+  # （多重比较通胀/退化统计/确认段完整性/过度声称/阳性对照完整性），绝不搜索结构、
+  # 绝不自动合并、不改代码。启用后每轮 cycle 末尾读 state.json 写 audit/report。
+  # 注：叶子键带 redteam_ 前缀（loader 扁平化丢父级名，避免与其它段撞键）。
+  redteam:
+    redteam_audit_enabled: false
+    redteam_out: audit                 # 报告输出子目录（DATA_DIR 下）

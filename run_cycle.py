@@ -603,6 +603,18 @@ def main():
     except Exception as de:
         print(f"[cycle] dashboard 生成失败(不影响主流程): {de}")
 
+    # 8d. 红队自审（诚实守护，只读；默认关闭，不扰生产）
+    if cfg.get("redteam_audit_enabled", False):
+        try:
+            import redteam_audit as RA
+            with open(STATE, "r", encoding="utf-8") as _f:
+                _st = json.load(_f)
+            _rep = RA.audit_cycle(_st, summary_text=None)
+            _jp, _mp = RA.write_report(_rep, os.path.join(DATA_DIR, cfg.get("redteam_out", "audit")))
+            print(f"[cycle] 红队自审 verdict={_rep['verdict']} findings={_rep['n_findings']} -> {_mp}")
+        except Exception as _ae:
+            print(f"[cycle] 红队自审失败(不影响主流程): {_ae}")
+
 
 if __name__ == "__main__":
     main()

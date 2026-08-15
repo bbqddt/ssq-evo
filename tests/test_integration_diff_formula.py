@@ -85,13 +85,18 @@ def test_honesty_no_signal_on_real_data():
 
 
 def test_config_wiring():
-    """4) engine.yaml 的 diff_formula.enabled 正确落入 cfg。"""
+    """4) engine.yaml 的 diff_formula / redteam 段正确落入 cfg（接线正确性，不绑部署态值）。"""
     cfg = RC.load_cfg()
     assert "diff_formula_enabled" in cfg, "cfg 应含 diff_formula_enabled"
-    assert cfg["diff_formula_enabled"] is False, "默认应为关闭(实验性)"
+    assert isinstance(cfg["diff_formula_enabled"], bool), "diff_formula_enabled 应为 bool"
     assert cfg.get("diff_formula_candidates") == 6, "默认候选数应为 6"
+    # 红队自审段接线
+    assert "redteam_audit_enabled" in cfg, "cfg 应含 redteam_audit_enabled"
+    assert isinstance(cfg["redteam_audit_enabled"], bool), "redteam_audit_enabled 应为 bool"
+    assert cfg.get("redteam_out") == "audit", "redteam_out 默认应为 audit"
     print(f"  [整合4] 配置接线: diff_formula_enabled={cfg['diff_formula_enabled']}, "
-          f"candidates={cfg.get('diff_formula_candidates')}: PASS")
+          f"candidates={cfg.get('diff_formula_candidates')}, "
+          f"redteam_audit_enabled={cfg.get('redteam_audit_enabled')}: PASS")
 
 
 def main():
