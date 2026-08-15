@@ -1211,12 +1211,13 @@ def evaluate(sig_name, test_name, reds, blues, rng, k_sur, sur_type=None, params
         return None
     mean_s = svals.mean()
     std_s = svals.std()
-    # 代理分布退化(std≈0)时 z 无意义且会被 1e-12 地板放大成 ±1e9 量级的伪异常；
+    # 代理分布退化(std≈0)时 z 无意义且会被放大成伪异常；
     # 此时该检验对真实序列与 surrogate 无判别力，z 直接置 0（p 仍由排序法独立计算，不受影响）。
-    if std_s < 1e-9:
+    # 同时硬钳 |z|<=1e3，避免近退化 std(std 在 1e-9~1e-6 间)产生的天文数字污染报表/看板。
+    if std_s < 1e-6:
         z = 0.0
     else:
-        z = (real - mean_s) / std_s
+        z = float(np.clip((real - mean_s) / std_s, -1e3, 1e3))
     if direction == "high":
         p = (1.0 + np.sum(svals >= real)) / (1.0 + svals.size)
     else:
@@ -1266,7 +1267,8 @@ def evaluate_x(x, test_name, rng, k_sur, sur_type=None, test_params=None):
     mean_s = svals.mean()
     std_s = svals.std()
     # surrogate 分布退化(std≈0)时 z 无意义，直接置 0（p 由排序法独立计算，不受影响）
-    z = 0.0 if std_s < 1e-9 else (real - mean_s) / std_s
+    # 同时硬钳 |z|<=1e3，避免近退化 std 产生的天文数字污染报表/看板。
+    z = 0.0 if std_s < 1e-6 else float(np.clip((real - mean_s) / std_s, -1e3, 1e3))
     if direction == "high":
         p = (1.0 + np.sum(svals >= real)) / (1.0 + svals.size)
     else:

@@ -1,38 +1,28 @@
-# GitHub Actions —— ssq_evo 云端 7x24 结构搜索
-# 触发：每 30 分钟（错开整点） + 手动 workflow_dispatch
-# 机制：runner 每次全新 checkout -> 跑一轮 run_cycle -> 把数据/库/state 提交回仓库
-# 这样云端也具备持久记忆，与本地 Docker 容器互为冗余。
-name: SSQ Evo 7x24
+# GitHub Actions —— ssq_evo 测试门禁（仅此用途）
+#
+# 重要架构决策（2026-08-15 重构）：
+#   - 本地 Docker 引擎（daemon_loop + run_cycle）是**唯一**的结构搜索引擎与真相源；
+#     运行数据/状态落在 D:\ssq_evo_data（DATA_DIR 卷），已移出公开仓库(.gitignore)，
+#     不再由 CI 自动提交，避免：公开仓库塞增长型二进制 DB、与用户 push 撞车、双引擎状态分裂。
+#   - 因此本 workflow **不再跑 cycle、不再提交数据**，只做代码门禁：push/PR 时跑测试套件，
+#     防止坏代码合入 main。
+name: SSQ Evo CI
 
 on:
-  schedule:
-    - cron: "17,47 * * * *"      # 每 30 分钟（第 17、47 分，避开整点拥挤）
-  workflow_dispatch:            # 允许手动触发
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 permissions:
-  contents: write
-
-concurrency:
-  group: ssq-evo-cycle
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  cycle:
+  test:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
     steps:
-      - name: Checkout (含历史，便于回写)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Sync latest main before running (防 bot 回写旧引擎覆盖修复)
-        # 关键：bot 每次都先 rebase 到最新 main（含用户推送的引擎修复），再在其上叠加数据提交。
-        # 否则若 bot 在用户 push 前已 dispatch 并基于旧引擎 checkout，其 git push 会把修复冲掉。
-        run: |
-          git config user.name "ssq-evo-bot"
-          git config user.email "ssq-evo@users.noreply.github.com"
-          git pull --rebase origin main || true
+      - uses: actions/checkout@v4
 
       - name: Setup Python 3.13
         uses: actions/setup-python@v5
@@ -40,22 +30,9 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: pip install --no-cache-dir numpy scipy
+        run: pip install --no-cache-dir numpy scipy pytest
 
-      - name: Run one evolution cycle
+      - name: Run test suite
         env:
           DATA_DIR: ${{ github.workspace }}
-          TZ: Asia/Shanghai
-        run: python run_cycle.py
-
-      - name: Commit & push results back
-        run: |
-          git config user.name "ssq-evo-bot"
-          git config user.email "ssq-evo@users.noreply.github.com"
-          git add ssq_master.csv ssq_evo.db state.json config.json 2>/dev/null || true
-          if git diff --cached --quiet; then
-            echo "no changes to commit"
-          else
-            git commit -m "auto: cycle $(date +%Y%m%d-%H%M%S) [skip ci]"
-            git push
-          fi
+        run: python -m pytest tests/ -q

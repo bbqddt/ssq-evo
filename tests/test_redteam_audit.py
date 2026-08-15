@@ -14,7 +14,8 @@ def _base_state():
         "n_eval": 100,
         "wf_verdict": "SIGNAL", "wf_n_confirm": 3,
         "best_z_history": [3.1, 3.2, 2.9, 3.0],
-        "positive_control_verified": True,
+        "positive_control": {"verified": True, "verdict": "SIGNAL",
+                              "conf_p": 0.001, "disc_p": 0.002, "n_confirm": 2},
     }
 
 
@@ -61,6 +62,16 @@ def test_missing_confirmation_flagged():
     st.pop("wf_verdict", None)   # 删掉确认证据
     rep = RA.audit_cycle(st)
     assert any("未记录 #41 发现/确认分离" in f for f in rep["findings"]), rep["findings"]
+
+
+def test_positive_control_failure_alert():
+    """持续阳性对照失败（已知结构未被闸门检出）=> ALERT。"""
+    st = _base_state()
+    st["positive_control"] = {"verified": False, "verdict": "UNCONFIRMED",
+                              "conf_p": 0.4, "disc_p": 0.3, "n_confirm": 0}
+    rep = RA.audit_cycle(st)
+    assert rep["verdict"] == "ALERT"
+    assert any("持续阳性对照失败" in f for f in rep["findings"]), rep["findings"]
 
 
 def test_write_report_files():

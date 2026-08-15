@@ -25,6 +25,7 @@ import frontier as F
 import nonstationarity as NS
 import evaluator as EV
 import cache as C
+import positive_control as PC
 
 MASTER = os.path.join(DATA_DIR, "ssq_master.csv")
 DB = os.path.join(DATA_DIR, "ssq_evo.db")
@@ -40,6 +41,11 @@ DEFAULT_CFG = {
     "wf_n_folds": 3, "wf_disc_frac": 0.7,   # 发现/确认分离闸门 (#41)：折数 / 发现段占比
     "cache_enabled": True,                  # #40 增量评估缓存：同(基因组,数据集)复用，不改统计
     "cache_path": "eval_cache.json",        # 缓存文件（DATA_DIR 下）
+    # 持续阳性对照（闸门功率监控）：每 positive_control_every 轮注入已知结构验闸门还灵不灵
+    "positive_control_enabled": True,
+    "positive_control_every": 1,            # 1=每轮；>1 每 K 轮一次（省算力）
+    "positive_control_n": 1000, "positive_control_lag": 8,
+    "positive_control_k_sur": 30, "positive_control_folds": 2,
 }
 FDR_Q = 0.05          # 结构显著的 FDR 门槛（与看板一致）
 
@@ -485,12 +491,32 @@ def main():
         "wf_n_folds": (wf["n_folds"] if wf else None),
         "df_enabled": bool(cfg.get("diff_formula_enabled")),
         "df_gen": df_gen, "df_added": df_added,
+        "positive_control": pc,   # 持续阳性对照：闸门功率监控（None=本轮未跑）
         "alert": alert, "coverage": fr["coverage"],
         "note": ("候选结构! 需人工复核" if alert else "无超越随机的可提取结构 (null)"),
     }
     rid = S.insert_run(con, run)
     S.insert_evals(con, rid, all_evals)
     con.close()
+
+    # 8.5 持续阳性对照（闸门功率监控）：每 positive_control_every 轮注入已知结构，
+    # 验证统一诚信闸门仍灵敏；若判不出 SIGNAL 说明闸门功率退化，redteam_audit 会 ALERT。
+    pc = None
+    pc_every = int(cfg.get("positive_control_every", 1))
+    if cfg.get("positive_control_enabled", True) and (rid % pc_every == 0):
+        try:
+            pc_rng = np.random.default_rng(int(cfg.get("seed", 20260813)) + rid + 777)
+            pc = PC.run_positive_control(
+                pc_rng,
+                n=int(cfg.get("positive_control_n", 1000)),
+                P=int(cfg.get("positive_control_lag", 8)),
+                k_sur=int(cfg.get("positive_control_k_sur", 30)),
+                n_folds=int(cfg.get("positive_control_folds", 2)),
+                discovery_frac=float(cfg.get("discovery_frac", 0.7)))
+        except Exception as e:
+            pc = {"verified": False, "verdict": None, "conf_p": None,
+                  "disc_p": None, "n_confirm": None,
+                  "note": "positive_control error: %s" % e}
 
     # 8. 写 state.json
     lb_top = sorted(leaderboard.values(), key=lambda e: e["p_raw"])[:20]

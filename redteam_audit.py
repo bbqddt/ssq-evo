@@ -149,13 +149,22 @@ def holdout_integrity(state):
 
 
 def positive_control_note(state):
-    """阳性对照完整性提示（不自跑重型注入，保持只读）。"""
+    """持续阳性对照结果体检：run_cycle 每 K 轮真实注入已知结构并跑 #41 闸门。
+    若闸门对已知结构判不出 SIGNAL，说明闸门功率退化，直接 ALERT。
+    """
     findings = []
-    if state.get("positive_control_verified") is not True:
+    pc = state.get("positive_control")
+    if pc is None:
+        # 本轮未跑（positive_control_every>1 且非本轮次），不报警，等其节奏
+        return findings
+    if pc.get("verified") is not True:
+        verdict = pc.get("verdict")
+        conf_p = pc.get("conf_p")
         findings.append(
-            "state 未记录阳性对照验证证据（positive_control_verified!=true）。"
-            "建议定期跑 tests/test_discovery_confirmation.py 阳性对照，确认管线在注入已知结构时仍能检出，"
-            "防止闸门在长期迭代中悄悄失效（灵敏度退化）。"
+            "ALERT 持续阳性对照失败：注入已知 AR(1) 结构后 #41 闸门 verdict=%s "
+            "(conf_p=%s)。闸门功率疑似退化——真实结构已检不出，"
+            "管线/参数很可能已漂移，须立即人工核查（否则所有 null 结论的可信度都受损）。"
+            % (verdict, conf_p)
         )
     return findings
 
@@ -171,8 +180,9 @@ def audit_cycle(state, summary_text=None):
     findings += positive_control_note(state)
     findings += scan_overclaim(summary_text)
 
-    # 严重度：过度声称 / 退化统计 => ALERT；其余 => REVIEW；无 => OK
-    sev_alert = any("荒谬" in f or "绝对化措辞" in f for f in findings)
+    # 严重度：过度声称 / 退化统计 / 持续阳性对照失败 => ALERT（闸门坏了最严重）；其余 => REVIEW；无 => OK
+    sev_alert = any(("荒谬" in f or "绝对化措辞" in f or "持续阳性对照失败" in f)
+                    for f in findings)
     verdict = "OK" if not findings else ("ALERT" if sev_alert else "REVIEW")
     report = {
         "audited_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

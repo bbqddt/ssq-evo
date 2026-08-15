@@ -6,5 +6,17 @@ venv/
 
 # Docker 本地部署相关（Dockerfile / docker-compose.yml 保留进仓库，供本地部署参考）
 
-# 数据文件保留（ssq_master.csv / ssq_evo.db / state.json / config.json）——
-# 云端 runner 靠它们持久记忆，勿忽略
+# 运行数据/状态文件：本地 Docker 引擎是唯一真相源，产物落在 D:\ssq_evo_data（DATA_DIR 卷），
+# 不进 git（公开仓库不该存增长的二进制 DB/state，且避免 bot 自动提交与用户 push 撞车）。
+# 注：仓库根的 config.json 保留为模板(被跟踪)，实际运行时配置以 DATA_DIR 下为准。
+ssq_evo.db
+state.json
+state.*.json
+ssq_master.csv
+dashboard/
+eval_cache.json
+# 本地引擎日志
+daemon.log
+
+# 项目记忆/工具元数据（不进仓库）
+.workbuddy/

@@ -171,17 +171,24 @@ def build(s):
     ns_verdict = s.get("ns_verdict")
     ns_ok = bool(ns_n_drift == 0 and ns_n_mom == 0)   # 无显著非平稳 = 闸门干净
 
+    pc = s.get("positive_control")
+    pc_txt = "—"
+    if isinstance(pc, dict):
+        pc_txt = ("✓ 闸门灵敏(verdict=%s)" % pc.get("verdict")
+                  if pc.get("verified") else
+                  "✗ 阳性对照失败(闸门功率退化!)")
     three_cars = f"""
     <table class="cars">
       <tr><th>车辆</th><th>角色</th><th>模式</th><th>状态</th></tr>
       <tr><td><b>本地 Docker</b><br><span class=mono>ssq-evo-engine</span></td>
-          <td>主要计算(连续搜索)</td>
-          <td>连续 60s 冷却</td>
-          <td class="ok">✓ 运行中<br><span class=mono>{_esc(s.get('updated',''))}</span></td></tr>
+          <td>唯一计算引擎(连续搜索) + 持续阳性对照</td>
+          <td>连续 60s 冷却 + 每轮闸门复检</td>
+          <td class="ok">✓ 运行中<br><span class=mono>{_esc(s.get('updated',''))}</span><br>
+              <span class="{'ok' if (isinstance(pc,dict) and pc.get('verified')) else 'no'}">{_esc(pc_txt)}</span></td></tr>
       <tr><td><b>GitHub Actions</b><br><span class=mono>ssq_evo.yml</span></td>
-          <td>云端独立复现(双写者隔离)</td>
-          <td>cron 每 30min</td>
-          <td class="ok">✓ 已接入(用户自验: 30s/轮无堆积)</td></tr>
+          <td>代码门禁(仅 push/PR 跑测试，不跑引擎、不提交数据)</td>
+          <td>push/PR 触发</td>
+          <td class="ok">✓ 已接入(防坏代码合入 main)</td></tr>
       <tr><td><b>腾讯云 CloudStudio</b><br><span class=mono>监控看板</span></td>
           <td>对外可视化/分享层(静态)</td>
           <td>每轮自动刷新 + 部署</td>
