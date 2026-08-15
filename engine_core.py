@@ -21,6 +21,7 @@ import os as _os
 import copy
 import multiprocessing as mp
 import numpy as np
+import cache as C   # 增量缓存 + 跨平台并行调度
 
 # ---------------------------------------------------------------------------
 # 1. 信号映射 (signal maps)
@@ -1282,6 +1283,52 @@ def evaluate_x(x, test_name, rng, k_sur, sur_type=None, test_params=None):
 # 5. BH-FDR 校正
 # ---------------------------------------------------------------------------
 
+def evaluate_x_pooled(x, test_name, surs, test_params=None):
+    """在给定 1D 序列 x 上评估单变量检验，复用外部 surrogate 池 surs(shape (k, n))。
+
+    与 evaluate_x() 等价，但 surrogate 由调用方预先生成一次、多个检验共享，
+    避免 spectral_scan 对同一 x 重复生成 AAFT surrogate（主提速点，统计结果不变）。
+    返回与 evaluate() 同 schema dict 或 None。
+    """
+    if test_name not in TESTS or test_name in BIVARIATE_TESTS:
+        return None
+    x = np.asarray(x, float)
+    n = len(x)
+    if n < 8 or surs is None or surs.shape[0] == 0:
+        return None
+    func, direction, tier = TESTS[test_name]
+    try:
+        real = func(x, **(test_params or {}))
+    except Exception:
+        return None
+    if not math.isfinite(real):
+        return None
+    svals = []
+    for i in range(surs.shape[0]):
+        try:
+            sv = func(surs[i], **(test_params or {}))
+        except Exception:
+            continue
+        if math.isfinite(sv):
+            svals.append(sv)
+    svals = np.array(svals)
+    if svals.size == 0:
+        return None
+    mean_s = svals.mean()
+    std_s = svals.std()
+    z = 0.0 if std_s < 1e-9 else (real - mean_s) / std_s
+    if direction == "high":
+        p = (1.0 + np.sum(svals >= real)) / (1.0 + svals.size)
+    else:
+        p = (1.0 + np.sum(svals <= real)) / (1.0 + svals.size)
+    return {
+        "test": test_name, "tier": tier, "direction": direction,
+        "stat": real, "sur_mean": float(mean_s), "sur_std": float(std_s),
+        "z": float(z), "p_raw": float(p), "k_sur": int(svals.size),
+        "sur_max": float(svals.max()), "sur_min": float(svals.min()),
+    }
+
+
 def bh_fdr(pvals):
     p = np.asarray(pvals, float)
     n = p.size
@@ -1503,7 +1550,7 @@ class Evolution:
     (4) 多进程并行评估(按基因组)，把 8 核全用上。"""
 
     def __init__(self, reds, blues, rng, k_light=25, k_heavy=10, epochs=6, pop=24,
-                 elites=None, frontier=None, sur_type="aaft", n_workers=0):
+                 elites=None, frontier=None, sur_type="aaft", n_workers=0, eval_cache=None):
         self.reds = reds
         self.blues = blues
         self.rng = rng
@@ -1517,6 +1564,7 @@ class Evolution:
         self.leaderboard = {}                        # gkey -> 该基因组最优 eval
         self.tried = set(self.frontier.get("tried", []))
         self.sur_type = sur_type
+        self.eval_cache = eval_cache                 # 可选：增量评估缓存（disk）
         # 并行度：默认 min(CPU, pop)；单核环境退化为 1
         self.n_workers = n_workers or max(1, min(_os.cpu_count() or 4, max(2, pop)))
 
@@ -1534,30 +1582,35 @@ class Evolution:
 
     def run(self):
         pop = self._seed_pop()
-        pool = None
-        if self.n_workers > 1 and _os.name == "posix":
-            try:
-                pool = mp.get_context("fork").Pool(processes=self.n_workers)
-            except Exception:
-                pool = None
-        try:
-            for ep in range(self.epochs):
+        fp = C.data_fingerprint(self.reds, self.blues) if self.eval_cache else None
+        for ep in range(self.epochs):
                 # 去重：本轮/跨轮已测过的基因组直接跳过，省时间
                 to_eval = [g for g in pop
                            if genome_key(g["sig"], g["test"], g["params"]) not in self.tried]
                 if not to_eval:
                     to_eval = pop
                 tasks = []
+                cached_hits = []
                 for g in to_eval:
+                    gkey = genome_key(g["sig"], g["test"], g["params"])
+                    # 增量缓存：同 (基因组, 数据集指纹) 直接复用上次完整评估（严格等价，不改统计）
+                    if self.eval_cache is not None:
+                        cev = self.eval_cache.get(gkey, fp)
+                        if cev is not None:
+                            ev = dict(cev)
+                            ev["gkey"] = gkey
+                            cached_hits.append(ev)
+                            self.tried.add(gkey)
+                            continue
                     k = self._k(TESTS[g["test"]][2])
                     seed = int(self.rng.integers(0, 2 ** 31 - 1))
                     tasks.append((g["sig"], g["test"], g["params"],
                                  self.reds, self.blues, k,
                                  TEST_SUR_TYPE.get(g["test"], "aaft"), seed))
-                if pool is not None:
-                    res_iter = pool.imap_unordered(_eval_worker, tasks)
-                else:
-                    res_iter = (_eval_worker(t) for t in tasks)
+                # 跨平台并行：cache.parallel_map 默认线程池（numpy 释放 GIL，
+                # 对 surrogate 生成有真实加速；Windows 上 fork-Pool 不可用，线程池是唯一零坑路径）。
+                # 每个 task 自带 seed、内部建独立 rng，线程安全。
+                res_iter = C.parallel_map(_eval_worker, tasks, max_workers=self.n_workers)
                 evals = []
                 for ev in res_iter:
                     if ev is None:
@@ -1569,6 +1622,15 @@ class Evolution:
                     if key not in self.leaderboard or ev["p_raw"] < self.leaderboard[key]["p_raw"]:
                         self.leaderboard[key] = ev
                     self.tried.add(key)
+                    if self.eval_cache is not None:
+                        self.eval_cache.put(key, fp, ev)
+                # 命中缓存的基因组并入（与实时评估同等对待，参与 leaderboard 与 FDR）
+                for ev in cached_hits:
+                    key = ev["gkey"]
+                    evals.append(ev)
+                    self.all_evals.append(ev)
+                    if key not in self.leaderboard or ev["p_raw"] < self.leaderboard[key]["p_raw"]:
+                        self.leaderboard[key] = ev
                 # 选择：按本基因组最优 p_raw 取前 50%
                 evals_sorted = sorted(evals, key=lambda e: self.leaderboard[e["gkey"]]["p_raw"]) if evals else []
                 survivors = evals_sorted[:max(2, len(evals_sorted) // 2)]
@@ -1596,10 +1658,6 @@ class Evolution:
                         else:
                             newpop.append(mutate_genome(base, self.rng))
                 pop = newpop
-        finally:
-            if pool is not None:
-                pool.close()
-                pool.join()
         return self.leaderboard, self.all_evals
 
 # ---------------------------------------------------------------------------

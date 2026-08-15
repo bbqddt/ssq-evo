@@ -24,6 +24,7 @@ import store as S
 import frontier as F
 import nonstationarity as NS
 import evaluator as EV
+import cache as C
 
 MASTER = os.path.join(DATA_DIR, "ssq_master.csv")
 DB = os.path.join(DATA_DIR, "ssq_evo.db")
@@ -37,6 +38,8 @@ DEFAULT_CFG = {
                       # 强耦合可被判 q<0.05, 既保留"真实数据仍稳 null"又证明闸门有检出功效。
     "seed": 20260813, "oos_frac": 0.2, "alert_q": 0.01, "alert_oos_p": 0.01,
     "wf_n_folds": 3, "wf_disc_frac": 0.7,   # 发现/确认分离闸门 (#41)：折数 / 发现段占比
+    "cache_enabled": True,                  # #40 增量评估缓存：同(基因组,数据集)复用，不改统计
+    "cache_path": "eval_cache.json",        # 缓存文件（DATA_DIR 下）
 }
 FDR_Q = 0.05          # 结构显著的 FDR 门槛（与看板一致）
 
@@ -186,7 +189,67 @@ def load_cfg():
         p = os.path.join(HERE, "config.json")   # 回退到代码目录
     if os.path.exists(p):
         cfg.update(json.load(open(p, encoding="utf-8")))
+    # 3) YAML 扁平化后 cache 段键为 enabled/path，映射到本项目命名
+    if "enabled" in cfg:
+        cfg["cache_enabled"] = cfg.pop("enabled")
+    if "path" in cfg:
+        cfg["cache_path"] = cfg.pop("path")
     return cfg
+
+
+# ============================================================
+# #39 可微 Formula 集成 —— 额外候选源（实验性，默认关闭）
+# ============================================================
+def run_diff_formula_candidates(reds, blues, rng, cfg, seen_keys, all_evals):
+    """#39 集成：在发现段上数值优化连续超参生成候选，冻结后并入统一诚信闸门池。
+
+    纪律（与 #39 模块一致，且对接生产管线）：
+      - 优化只在发现段（discovery_frac 前缀）；确认段优化器从未见过。
+      - 候选经 E.evaluate 在全量数据评估 p_raw 后，与演化/谱/因果候选一起进入
+        同一个 BH-FDR 池，并随后接受 OOT 盲测 + 多零假设交叉 + #41 发现/确认分离闸门
+        的 unified 裁决——绝不绕过任何诚信闸门（与演化候选完全相同的待遇）。
+    返回 (n_generated, n_added_to_pool)。disabled 时返回 (0, 0)。
+    """
+    if not cfg.get("diff_formula_enabled"):
+        return 0, 0
+    try:
+        import diff_formula as DF
+    except Exception as e:
+        print(f"[cycle] #39 可微Formula 模块导入失败(跳过): {e}")
+        return 0, 0
+    try:
+        rng_df = np.random.default_rng(int(cfg.get("seed", 20260813)) + len(reds) + 99)
+        recs = DF.run_diff_search(
+            reds, blues, rng_df,
+            n_candidates=cfg.get("diff_formula_candidates", 6),
+            discovery_frac=0.7,
+            k_sur_opt=cfg.get("diff_formula_k_sur", cfg.get("k_light", 25)),
+            n_steps=cfg.get("diff_formula_n_steps", 12),
+            wf_n_folds=cfg.get("wf_n_folds", 3),
+            wf_disc_frac=cfg.get("wf_disc_frac", 0.7),
+            wf_k_sur=cfg.get("diff_formula_wf_k_sur", 25),
+            confirm=False)  # 统一闸门在下方生产管线重判，避免双重确认开销
+        added = 0
+        for r in recs:
+            g = {"sig": r["sig"], "test": r["test"], "params": r["params"]}
+            k = E.genome_key(g["sig"], g["test"], g.get("params", {}))
+            if k in seen_keys:
+                continue
+            ev = E.evaluate(g["sig"], g["test"], reds, blues, rng_df,
+                           cfg.get("k_light", 25), params=g.get("params"))
+            if ev is None:
+                continue
+            ev["diff_formula"] = True          # 标记来源，供看板/审计区分
+            ev["df_disc_p"] = r.get("disc_p")
+            seen_keys.add(k)
+            all_evals.append(ev)
+            added += 1
+        print(f"[cycle] #39 可微Formula: 生成 {len(recs)} 候选, 入池 {added} "
+              f"(经统一诚信闸门重判, 不绕过)")
+        return len(recs), added
+    except Exception as e:
+        print(f"[cycle] #39 可微Formula 运行失败(不影响主流程): {e}")
+        return 0, 0
 
 
 def main():
@@ -216,13 +279,21 @@ def main():
 
     # 2. 演化（接入跨轮 frontier：精英 seed + 参数 hill-climbing + 去重）
     rng = np.random.default_rng(cfg["seed"] + N)  # 随样本量变化种子，避免每轮完全相同
+    # #40 增量评估缓存：同(基因组,数据集指纹)复用上次完整评估（严格等价，不改统计）
+    ec = None
+    if cfg.get("cache_enabled"):
+        try:
+            ec = C.EvalCache(os.path.join(DATA_DIR, cfg.get("cache_path", "eval_cache.json")))
+        except Exception as e:
+            print(f"[cycle] 缓存初始化失败(降级为无缓存): {e}")
+            ec = None
     fr = F.load_frontier(DATA_DIR)
     elite_seeds = fr.get("elites", [])
     print(f"[cycle] frontier: 历史覆盖度={fr.get('coverage',0)}, 精英种子={len(elite_seeds)}, "
           f"z历史长度={len(fr.get('best_z_history',[]))}")
     evo = E.Evolution(reds, blues, rng, k_light=cfg["k_light"], k_heavy=cfg["k_heavy"],
                       epochs=cfg["epochs"], pop=cfg["pop"],
-                      elites=elite_seeds, frontier=fr)
+                      elites=elite_seeds, frontier=fr, eval_cache=ec)
     leaderboard, all_evals = evo.run()
     print(f"[cycle] 评估算子数(含重复): {len(all_evals)}, 唯一基因组: {len(leaderboard)}")
 
@@ -252,6 +323,13 @@ def main():
             all_evals.append(e)
     print(f"[cycle] 因果扫描: 测试 {caus['n']} 组合, q_min={caus['q_min']:.4g}, "
           f"最强={caus['best_sig']}/{caus['best_test']} (p={caus['p_min']:.4g}, {caus['verdict']})")
+
+    # 2c. #39 可微 Formula 候选（实验性，默认关闭）：发现段数值优化连续超参生成候选，
+    #     冻结后并入统一诚信闸门池（BH-FDR + OOT + 交叉零假设 + #41 发现/确认分离闸门），
+    #     与演化/谱/因果候选完全相同的待遇，绝不绕过任何闸门。
+    df_gen, df_added = run_diff_formula_candidates(reds, blues, rng, cfg, seen_keys, all_evals)
+    if df_gen:
+        print(f"[cycle] #39 可微Formula: 生成 {df_gen}, 入池 {df_added}")
 
     # 3b. 非平稳性 / 物理磨损监控闸门（方向1）：每球频率随时间漂移 + 短期动量
     #     与演化/谱/因果 FDR 池分离——它测的是"单球边际频率的时间非平稳"，
@@ -364,6 +442,12 @@ def main():
     newly = fr["coverage"] - prev_tried
     print(f"[cycle] 迭代进度: 覆盖度={fr['coverage']} (本论新增 {newly}), "
           f"精英={len(fr['elites'])}, z轨迹末值={z_hist[-1] if z_hist else 'NA'}")
+    # #40 增量缓存：汇报命中率并落盘
+    if ec is not None:
+        cs = ec.stats()
+        print(f"[cycle] 增量缓存: 命中率={cs['rate']*100:.0f}% (命中{cs['hits']}/"
+              f"总{cs['hits']+cs['misses']}, 条目{cs['entries']})")
+        ec.flush()
 
     # 7. 持久化
     con = S.open_db(DB)
@@ -399,6 +483,8 @@ def main():
         "wf_disc_p": (round(wf["disc_combined_p"], 4) if wf else None),
         "wf_n_confirm": (wf["n_confirm"] if wf else None),
         "wf_n_folds": (wf["n_folds"] if wf else None),
+        "df_enabled": bool(cfg.get("diff_formula_enabled")),
+        "df_gen": df_gen, "df_added": df_added,
         "alert": alert, "coverage": fr["coverage"],
         "note": ("候选结构! 需人工复核" if alert else "无超越随机的可提取结构 (null)"),
     }
