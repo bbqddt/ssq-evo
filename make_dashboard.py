@@ -248,6 +248,7 @@ def build(s):
     {kpi_card("OOT 盲测命中率", _num(oot_hit,3), f"冻结规则盲打未来 · p={_num(oot_p,4)} · n={oot_n} (需结构FDR显著方作数)", "#ff8fab", ok=oot_ok)}
     {kpi_card("谱扫描筛查 q", _num(spectral_q,4), f"{spectral_n}组合枚举 · 秩FDR {_num(spectral_q_rank,4)} · 最强 {_esc(spectral_sig or '—')}/{_esc(spectral_test or '—')} · z峰值 {_num(spectral_z,1)}" + (f" · OOT p={_num(spectral_oot_p,4)}{'✓' if spectral_oot_above else ''}" if spectral_oot_p is not None else " · (OOT未触发)"), "#ffd166", ok=spec_ok)}
     {kpi_card("因果耦合 (CCM/Granger)", _num(causal_best,4) if causal_best is not None else "—", f"最强 {_esc(causal_sig or '—')}/{_esc(causal_test or '—')} · CCM ρ={_num(ccm_rho,3) if ccm_rho is not None else '—'} · Granger F={_num(granger_f,3) if granger_f is not None else '—'}" + (f" · p={_num(causal_p,4)}" if causal_p is not None else ""), "#c77dff", ok=causal_ok)}
+    {kpi_card("发现/确认分离闸门 (#41)", _esc(s.get('wf_verdict') or '—'), f"确认合并p={_num(s.get('wf_conf_p',1),4)} · 发现p={_num(s.get('wf_disc_p',1),4)} · 多数折确认 {s.get('wf_n_confirm','?')}/{s.get('wf_n_folds','?')}", "#52d1ff" if (s.get('wf_verdict') in ('NULL','UNCONFIRMED')) else ("#3ddc84" if s.get('wf_verdict')=='SIGNAL' else "#ff6b6b"), ok=(s.get('wf_verdict')=='SIGNAL'))}
     {kpi_card("非平稳监控 (磨损/动量)", ("NULL" if ns_ok else "异常"), f"漂移显著 {ns_n_drift or 0} 球 · 动量 {ns_n_mom or 0} 球 · 最强漂移 {_esc(ns_best_drift_sig or '—')}={_num(ns_best_drift_val,4)} q={_num(ns_best_drift_q,4)} · 最强动量 {_esc(ns_best_mom_sig or '—')}={_num(ns_best_mom_val,4)} q={_num(ns_best_mom_q,4)}", "#9aa0ff", ok=ns_ok)}
     {kpi_card("零假设交叉一致", "是" if consistent else "否", f"primary({_esc(cpt)})={_num(cp,4) if cp is not None else '—'}", "#3ddc84" if consistent else "#ff6b6b", ok=cross_ok)}
     {kpi_card("ALERT", "触发" if alert else "未触发", f"门槛 q&lt;{ALERT_Q} & OOS p&lt;{OOS_P}", "#3ddc84" if alert else "#ff6b6b", ok=alert)}
@@ -292,9 +293,13 @@ def build(s):
 
   <div class="note">本看板由 run_cycle 每轮自动生成，经 CloudStudio 部署到腾讯云。全部统计闸门
     (BH-FDR 多重比较校正、AAFT/IAAFT/shuffle/twin 四零假设交叉、样本外验证、Out-of-Time 盲测、
-    <b>直接谱扫描兜底</b>) 均为预注册，不人为调高显著性。谱扫描枚举全部基信号 × 谱/自相关检验
-    （fft_peak/acf_max/dfa_alpha/mi_max），独立于演化搜索，补全"演化漏检具体 (信号,检验) 组合"盲区；
-    OOT 盲测将演化(前85%训练)与盲测(末段未来)彻底隔离，是进化搜索防过拟合的终极诚信闸门。</div>
+    <b>直接谱扫描兜底</b>、<b>发现/确认分离 (#41)</b>) 均为预注册，不人为调高显著性。
+    谱扫描枚举全部基信号 × 谱/自相关检验（fft_peak/acf_max/dfa_alpha/mi_max），独立于演化搜索，
+    补全"演化漏检具体 (信号,检验) 组合"盲区；OOT 盲测将演化(前85%训练)与盲测(末段未来)彻底隔离；
+    <b>发现/确认分离闸门进一步深化 honesty</b>：候选一旦选定即冻结，在发现阶段从未见过的滚动未来段上
+    跨折独立确认（Fisher 合并 + 多数折确认），专门拦截"候选在全量数据上被挑出→再在尾部验证"的
+    选择性偏差——这正是自演进系统最易翻车处。SIGNAL(结构在独立未来复现)/UNCONFIRMED(只活在发现集，
+    闸门已拦截)/NULL(无结构) 三态互斥。</div>
 </div></body></html>"""
     return html_doc
 

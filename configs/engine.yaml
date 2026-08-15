@@ -19,3 +19,5 @@ engine:
     fdr_q: 0.05        # 结构显著 FDR 门槛
     alert_q: 0.01      # ALERT 闸门 q 阈值
     alert_oos_p: 0.01  # ALERT 闸门 OOS p 阈值
+    wf_n_folds: 3      # 发现/确认分离闸门(#41)：walk-forward 折数
+    wf_disc_frac: 0.7  # 发现/确认分离闸门(#41)：发现段占比(余下为确认段)

@@ -23,6 +23,7 @@ import data as D
 import store as S
 import frontier as F
 import nonstationarity as NS
+import evaluator as EV
 
 MASTER = os.path.join(DATA_DIR, "ssq_master.csv")
 DB = os.path.join(DATA_DIR, "ssq_evo.db")
@@ -35,6 +36,7 @@ DEFAULT_CFG = {
                       # 经 BH-FDR(8检验) 后 q 仅 0.051(勉强不过 0.05)。提到 50 使 p 地板 1/51≈0.0196,
                       # 强耦合可被判 q<0.05, 既保留"真实数据仍稳 null"又证明闸门有检出功效。
     "seed": 20260813, "oos_frac": 0.2, "alert_q": 0.01, "alert_oos_p": 0.01,
+    "wf_n_folds": 3, "wf_disc_frac": 0.7,   # 发现/确认分离闸门 (#41)：折数 / 发现段占比
 }
 FDR_Q = 0.05          # 结构显著的 FDR 门槛（与看板一致）
 
@@ -324,8 +326,24 @@ def main():
         except Exception as e:
             print(f"[cycle] 谱扫描 OOT 验证失败(不影响主流程): {e}")
 
+    # 5f. 发现/确认分离闸门 (#41) —— 把"在发现段挖出的候选"在独立确认段上跨折裁决，
+    # 彻底切断"候选在全量数据上被挑出→再在尾部验证"的选择性偏差（自演进系统最易翻车处）。
+    # 候选一旦选定即冻结，在发现阶段从未见过的滚动未来段上一次性独立验证，跨折 Fisher 合并
+    # 并要求多数折确认。verdict=SIGNAL 才是"结构在独立未来复现"的唯一诚实证据。
+    wf = None
+    wf_signal = False
+    if lb_items:
+        try:
+            wf = EV.confirm_candidate(top, reds, blues, rng,
+                                      n_folds=cfg.get("wf_n_folds", 3),
+                                      discovery_frac=cfg.get("wf_disc_frac", 0.7),
+                                      k_sur=cfg["k_light"])
+            wf_signal = bool(wf and wf["verdict"] == "SIGNAL")
+        except Exception as e:
+            print(f"[cycle] 发现/确认分离闸门失败(不影响主流程): {e}")
+
     alert = ((best_q < cfg["alert_q"]) and (oos_p is not None) and (oos_p < cfg["alert_oos_p"])) \
-            or spectral_alert
+            or spectral_alert or wf_signal
     # 诚实闸门：方向准确率"高于随机"必须先过结构 FDR 显著(best_q<0.05)，否则只是
     # 从大量候选中挑最优再测的"选择性偏差"产物，不能作为结论。
     oos_above = bool(acc and acc["above_random"] and best_q < 0.05)
@@ -376,6 +394,11 @@ def main():
         "spectral_oot_above": bool(spectral_oot and spectral_oot["above_random"]),
         "spectral_oot_n": (spectral_oot["n"] if spectral_oot else 0),
         "spectral_alert": spectral_alert,
+        "wf_verdict": (wf["verdict"] if wf else None),
+        "wf_conf_p": (round(wf["conf_combined_p"], 4) if wf else None),
+        "wf_disc_p": (round(wf["disc_combined_p"], 4) if wf else None),
+        "wf_n_confirm": (wf["n_confirm"] if wf else None),
+        "wf_n_folds": (wf["n_folds"] if wf else None),
         "alert": alert, "coverage": fr["coverage"],
         "note": ("候选结构! 需人工复核" if alert else "无超越随机的可提取结构 (null)"),
     }
@@ -415,6 +438,12 @@ def main():
         "spectral_oot_above": bool(spectral_oot and spectral_oot["above_random"]),
         "spectral_oot_n": (spectral_oot["n"] if spectral_oot else 0),
         "spectral_alert": spectral_alert,
+        # 发现/确认分离闸门 (#41)：候选冻结后在独立确认段跨折裁决
+        "wf_verdict": (wf["verdict"] if wf else None),
+        "wf_conf_p": (round(wf["conf_combined_p"], 4) if wf else None),
+        "wf_disc_p": (round(wf["disc_combined_p"], 4) if wf else None),
+        "wf_n_confirm": (wf["n_confirm"] if wf else None),
+        "wf_n_folds": (wf["n_folds"] if wf else None),
         # 因果耦合（独立轻量扫描）
         "causal_q_min": caus["q_min"], "causal_p_min": caus["p_min"],
         "causal_best_sig": caus["best_sig"], "causal_best_test": caus["best_test"],

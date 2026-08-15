@@ -1227,6 +1227,57 @@ def evaluate(sig_name, test_name, reds, blues, rng, k_sur, sur_type=None, params
         "z": float(z), "p_raw": float(p), "k_sur": int(svals.size), "sur_max": float(svals.max()), "sur_min": float(svals.min()),
     }
 
+def evaluate_x(x, test_name, rng, k_sur, sur_type=None, test_params=None):
+    """在给定 1D 序列 x 上评估**单变量**检验（阳性对照工具：先把结构注入 x 再测）。
+
+    与 evaluate() 的区别：x 已构造好（跳过信号映射 / 复合公式层），仅支持单变量检验
+    （双变量需 source+target，此处不可用）。shuffle / AAFT 零假设与主线 evaluate() 一致，
+    保证阳性对照与生产判别逻辑完全相同。返回 evaluate() 同 schema dict 或 None。"""
+    if test_name not in TESTS or test_name in BIVARIATE_TESTS:
+        return None
+    x = np.asarray(x, float)
+    n = len(x)
+    if n < 8 or k_sur <= 0:
+        return None
+    func, direction, tier = TESTS[test_name]
+    try:
+        real = func(x, **(test_params or {}))
+    except Exception:
+        return None
+    if not math.isfinite(real):
+        return None
+    st = sur_type if sur_type in ("aaft", "iaaft", "shuffle", "twin") else TEST_SUR_TYPE.get(test_name, "aaft")
+    try:
+        surs = _gen_surrogates(x, int(k_sur), rng, st)
+    except Exception:
+        surs = np.empty((0, n))
+    svals = []
+    for i in range(surs.shape[0]):
+        try:
+            sv = func(surs[i], **(test_params or {}))
+        except Exception:
+            continue
+        if math.isfinite(sv):
+            svals.append(sv)
+    svals = np.array(svals)
+    if svals.size == 0:
+        return None
+    mean_s = svals.mean()
+    std_s = svals.std()
+    # surrogate 分布退化(std≈0)时 z 无意义，直接置 0（p 由排序法独立计算，不受影响）
+    z = 0.0 if std_s < 1e-9 else (real - mean_s) / std_s
+    if direction == "high":
+        p = (1.0 + np.sum(svals >= real)) / (1.0 + svals.size)
+    else:
+        p = (1.0 + np.sum(svals <= real)) / (1.0 + svals.size)
+    return {
+        "test": test_name, "tier": tier, "direction": direction, "sur_type": st,
+        "stat": real, "sur_mean": float(mean_s), "sur_std": float(std_s),
+        "z": float(z), "p_raw": float(p), "k_sur": int(svals.size),
+        "sur_max": float(svals.max()), "sur_min": float(svals.min()),
+    }
+
+
 # ---------------------------------------------------------------------------
 # 5. BH-FDR 校正
 # ---------------------------------------------------------------------------

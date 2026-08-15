@@ -15,6 +15,7 @@ _FLAT_KEYS = [
     "epochs", "pop", "seed", "oos_frac",
     "k_light", "k_heavy", "k_causal",
     "fdr_q", "alert_q", "alert_oos_p",
+    "wf_n_folds", "wf_disc_frac",
 ]
 
 
@@ -96,6 +97,7 @@ _DEFAULTS = {
     "epochs": 6, "pop": 24, "seed": 20260813, "oos_frac": 0.2,
     "k_light": 25, "k_heavy": 10, "k_causal": 50,
     "fdr_q": 0.05, "alert_q": 0.01, "alert_oos_p": 0.01,
+    "wf_n_folds": 3, "wf_disc_frac": 0.7,
 }
 
 
