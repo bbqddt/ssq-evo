@@ -1,9 +1,9 @@
 {
-  "updated": "2026-08-15 19:13:51",
+  "updated": "2026-08-15 20:26:09",
   "n_issues": 3490,
   "last_issue": "26093",
   "added": 0,
-  "cycle_id": 51,
+  "cycle_id": 52,
   "best_q": 0.16265912305516267,
   "best_sig": "red_recurrence_mean",
   "best_test": "mi_max",
@@ -81,8 +81,15 @@
     "alert_oos_p": 0.01,
     "wf_n_folds": 3,
     "wf_disc_frac": 0.7,
+    "cache_enabled": true,
+    "cache_path": "eval_cache.json",
     "k_nonstat": 300,
     "fdr_q": 0.05,
+    "diff_formula_enabled": false,
+    "diff_formula_candidates": 6,
+    "diff_formula_k_sur": 25,
+    "diff_formula_n_steps": 12,
+    "diff_formula_wf_k_sur": 25,
     "http_port": 8088,
     "schedule_hours": 0.25
   },
@@ -416,6 +423,12 @@
   ],
   "history": [
     {
+      "ts": "2026-08-15 20:26:09",
+      "best_q": 0.16265912305516267,
+      "alert": true,
+      "coverage": 116
+    },
+    {
       "ts": "2026-08-15 19:13:51",
       "best_q": 0.16265912305516267,
       "alert": true,
@@ -725,6 +738,6 @@
   "self_check": {
     "score": 0,
     "warnings": [],
-    "ts": "2026-08-15 19:13:51"
+    "ts": "2026-08-15 20:26:09"
   }
 }
