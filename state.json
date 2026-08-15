@@ -1,9 +1,9 @@
 {
-  "updated": "2026-08-15 17:59:06",
+  "updated": "2026-08-15 18:55:27",
   "n_issues": 3490,
   "last_issue": "26093",
   "added": 0,
-  "cycle_id": 49,
+  "cycle_id": 50,
   "best_q": 0.16265912305516267,
   "best_sig": "red_recurrence_mean",
   "best_test": "mi_max",
@@ -40,6 +40,11 @@
   "spectral_oot_above": true,
   "spectral_oot_n": 296,
   "spectral_alert": false,
+  "wf_verdict": "SIGNAL",
+  "wf_conf_p": 0.0001,
+  "wf_disc_p": 0.0001,
+  "wf_n_confirm": 3,
+  "wf_n_folds": 3,
   "causal_q_min": 0.8366013071895425,
   "causal_p_min": 0.17647058823529413,
   "causal_best_sig": "blue->red_mean",
@@ -56,7 +61,7 @@
   "ns_best_mom_q": 0.6512,
   "ns_verdict": "NULL (无显著非平稳)",
   "ns_k_sur": 300,
-  "alert": false,
+  "alert": true,
   "n_eval": 230,
   "n_unique": 116,
   "coverage": 116,
@@ -74,6 +79,8 @@
     "oos_frac": 0.2,
     "alert_q": 0.01,
     "alert_oos_p": 0.01,
+    "wf_n_folds": 3,
+    "wf_disc_frac": 0.7,
     "k_nonstat": 300,
     "fdr_q": 0.05,
     "http_port": 8088,
@@ -409,6 +416,12 @@
   ],
   "history": [
     {
+      "ts": "2026-08-15 18:55:27",
+      "best_q": 0.16265912305516267,
+      "alert": true,
+      "coverage": 116
+    },
+    {
       "ts": "2026-08-15 17:59:06",
       "best_q": 0.16265912305516267,
       "alert": false,
@@ -706,6 +719,6 @@
   "self_check": {
     "score": 0,
     "warnings": [],
-    "ts": "2026-08-15 17:59:06"
+    "ts": "2026-08-15 18:55:27"
   }
 }
