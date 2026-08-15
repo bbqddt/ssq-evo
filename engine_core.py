@@ -654,6 +654,211 @@ def t_transfer_entropy(x_source, x_target, k_history=1, bins=8, sub=2000):
 
     return float(max(0.0, te_val))
 
+
+def t_ccm(x_source, x_target, E=3, tau=1, lib_sizes=None, n_surr=0):
+    """Convergent Cross Mapping (Sugihara et al. 2012) —— 因果耦合探测金标准。
+
+    原理：若 X 因果影响 Y，则 Y 的影子流形 My 能重构 X 的状态（交叉映射技能 ρ>0），
+    且 ρ 随库长 L 增大而**收敛上升**（更多数据→估计更准）。纯相关但不因果的变量
+    不会收敛（ρ 随机波动或下降）。
+    返回值：max ρ（最大交叉映射技能，越大=越强因果证据）。
+    参数：
+        x_source / x_target: 等长 1D 序列
+        E: 嵌入维度（默认 3）
+        tau: 时间滞后（默认 1）
+        lib_sizes: 库长序列（默认从 N/10 到 N 的等比数列，~8 个点）
+        n_surr: surrogate 数（>0 时返回 (rho_max, convergence_slope, p_surrogate) 元组；
+                 =0 时只返回 rho_max 标量，与现有单值检验接口兼容）
+    """
+    xs = np.asarray(x_source, float); xt = np.asarray(x_target, float)
+    n = min(len(xs), len(xt))
+    xs, xt = xs[:n], xt[:n]
+    if n < (E + 1) * tau + 10:
+        return np.nan
+
+    # ---- 延迟嵌入构造影子流形 ----
+    def _embed(v, emb_E, emb_tau):
+        m = len(v) - (emb_E - 1) * emb_tau
+        if m <= 0:
+            return np.empty((0, emb_E))
+        arr = np.empty((m, emb_E))
+        for i in range(emb_E):
+            arr[:, i] = v[i * emb_tau:i * emb_tau + m]
+        return arr
+
+    Mx = _embed(xs, E, tau)
+    My = _embed(xt, E, tau)
+    lib_n = Mx.shape[0]
+    if lib_n < 20:
+        return np.nan
+
+    if lib_sizes is None:
+        # 从 ~10% 到 100% 的等比数列，保证至少 20 个点
+        lo = max(20, lib_n // 10)
+        if lo >= lib_n:
+            lib_sizes = [lib_n]
+        else:
+            lib_sizes = np.unique(np.geomspace(lo, lib_n, num=8).astype(int))
+
+    # ---- 交叉映射：用 My 的近邻预测 Mx ----
+    def _ccm_skill(M_from, M_to, L):
+        """给定库长 L，用 M_from 的前 L 个点作为影子库，映射回 M_to 的估计值。"""
+        L = min(L, M_from.shape[0])
+        if L < E + 2:
+            return np.nan, np.nan
+        library = M_from[:L]
+        target_lib = M_to[:L]   # M_from 的邻居在 M_to 中对应的值
+
+        # 对 M_from 中每个点找其在 M_from 自身中的 E+1 近邻（不含自身）
+        rhos = []
+        pred_vals = np.zeros((L, E))  # 每个点预测 E 维嵌入向量
+        for i in range(L):
+            dists = np.sqrt(((library - library[i]) ** 2).sum(axis=1))
+            dists[i] = np.inf  # 排除自身
+            nn_idx = np.argpartition(dists, E + 1)[:E + 1]
+            nn_dists = dists[nn_idx]
+            if nn_dists.min() < 1e-15 or nn_dists.sum() < 1e-15:
+                continue
+            w = np.exp(-nn_dists / nn_dists.min())  # 指数权重
+            # 用 M_to（目标流形）中对应邻居的值加权预测 M_to[i]
+            pred_vals[i] = (w[:, None] * target_lib[nn_idx]).sum(axis=0) / w.sum()
+
+        # 用有有效预测的点算 ρ（M_to 实际值 vs 交叉映射预测值）
+        valid = np.isfinite(pred_vals).all(axis=1)
+        if valid.sum() < E + 2:
+            return np.nan, np.nan
+        actual = M_to[:L][valid]       # (valid_n, E)
+        pred = pred_vals[valid]         # (valid_n, E)
+        # 对每个嵌入维度算 ρ，取最大值作为整体技能
+        best_rho = 0.0
+        for dim in range(min(actual.shape[1], pred.shape[1])):
+            a = actual[:, dim]; p = pred[:, dim]
+            if len(a) > 2:
+                c = np.corrcoef(a, p)[0, 1]
+                if np.isfinite(c) and abs(c) > abs(best_rho):
+                    best_rho = float(c)
+        return best_rho if abs(best_rho) > 0 else np.nan, valid.sum()
+
+    # ---- 主 CCM：X→Y 方向（用 My 映射 Mx）----
+    rho_vals = []; L_vals = []
+    for L in lib_sizes:
+        r, nv = _ccm_skill(My, Mx, L)
+        if np.isfinite(r):
+            rho_vals.append(r); L_vals.append(L)
+
+    if len(rho_vals) < 3:
+        return np.nan
+
+    rho_max = max(rho_vals)
+
+    # 收敛斜率：ρ vs log(L) 的线性回归斜率（正斜率=收敛=因果证据）
+    logL = np.log(np.array(L_vals, float))
+    rhos = np.array(rho_vals)
+    slope, intercept = np.polyfit(logL, rhos, 1)[:2]
+
+    if n_surr > 0:
+        # Surrogate: 打破 X-Y 耦合但保留各自边际分布（循环移位/相位随机化）
+        sur_slopes = []
+        for _ in range(n_surr):
+            shift = rng.integers(1, n - 1)
+            xs_sur = np.roll(xs, shift)
+            Mx_sur = _embed(xs_sur, E, tau)
+            sv = []; sl = []
+            for L in lib_sizes:
+                r, _ = _ccm_skill(My, Mx_sur, L)
+                if np.isfinite(r):
+                    sv.append(r); sl.append(L)
+            if len(sv) >= 3:
+                s_logL = np.log(np.array(sl, float))
+                s_rhos = np.array(sv)
+                s_slope, _ = np.polyfit(s_logL, s_rhos, 1)[:2]
+                sur_slopes.append(s_slope)
+        p_sur = (1 + sum(1 for s in sur_slopes if s >= slope)) / (1 + len(sur_slopes))
+        return rho_max, float(slope), p_sur
+
+    return float(rho_max)
+
+
+def t_granger_causality(x_source, x_target, max_lag=5):
+    """Granger 因果检验（简化 VAR/F-test 版）。
+
+    检验"X 的过去是否有助于预测 Y（超出 Y 自身过去的信息量）"。
+    用 OLS 回归对比两个模型：
+      - 受限模型：Y_t = a + Σ b_i Y_{t-i}
+      - 无限模型：Y_t = a + Σ c_i Y_{t-i} + Σ d_j X_{t-j}
+    F 统计量度量加入 X 后残差平方和的显著减少。
+    返回值：F 统计量（越大=越强因果证据）。
+    参数：
+        x_source / x_target: 等长 1D 序列
+        max_lag: 最大滞后阶数（默认 5；实际选最优 lag 用 BIC）
+    """
+    from numpy.linalg import lstsq
+
+    xs = np.asarray(x_source, float); xt = np.asarray(x_target, float)
+    n = min(len(xs), len(xt))
+    xs, xt = xs[:n], xt[:n]
+    if n < max_lag * 3 + 5:
+        return np.nan
+
+    def _ols_resid(y, X):
+        """OLS 回归，返回残差平方和。"""
+        try:
+            beta, _, _, _ = lstsq(X, y, rcond=None)
+            resid = y - X @ beta
+            return float((resid ** 2).sum())
+        except Exception:
+            return np.inf
+
+    def _make_lag_matrix(y, p):
+        """构造滞后矩阵：每行是 [1, y_{t-1}, ..., y_{t-p}]。"""
+        T = len(y) - p
+        if T <= 0:
+            return None, None
+        X = np.ones((T, p + 1))
+        for i in range(p):
+            X[:, i + 1] = y[p - i - 1:n - i - 1]
+        return y[p:], X
+
+    best_lag = 1
+    best_bic = np.inf
+    for lag in range(1, max_lag + 1):
+        y_lag, X_lag = _make_lag_matrix(xt, lag)
+        if y_lag is None or X_lag is None:
+            continue
+        rss = _ols_resid(y_lag, X_lag)
+        T_eff = len(y_lag)
+        k_params = lag + 1
+        bic = T_eff * np.log(rss / T_eff + 1e-30) + k_params * np.log(T_eff)
+        if bic < best_bic:
+            best_bic = bic; best_lag = lag
+
+    lag = best_lag
+    y_lag, X_restricted = _make_lag_matrix(xt, lag)
+    if y_lag is None or X_restricted is None:
+        return np.nan
+
+    rss_r = _ols_resid(y_lag, X_restricted)
+
+    # 无限模型：加入 X 的滞后项
+    xs_lag = np.zeros((len(y_lag), lag))
+    for i in range(lag):
+        xs_lag[:, i] = xs[lag - i - 1:n - i - 1]
+    X_unrestricted = np.hstack([X_restricted, xs_lag])
+    rss_u = _ols_resid(y_lag, X_unrestricted)
+
+    if rss_u >= rss_r or rss_u < 1e-30:
+        return 0.0  # X 不增加任何解释力
+
+    T_eff = len(y_lag)
+    df_num = lag          # 加入 X 增加的自由度
+    df_den = T_eff - 2 * lag - 1
+    if df_den <= 0:
+        return np.nan
+
+    F_stat = ((rss_r - rss_u) / df_num) / (rss_u / df_den)
+    return float(F_stat) if math.isfinite(F_stat) else np.nan
+
+
 TESTS = {
     "fft_peak":   (t_fft_peak, "high", "light"),
     "acf_max":    (t_acf_max, "high", "light"),
@@ -668,10 +873,12 @@ TESTS = {
     "multiscale_se":  (t_multiscale_se, "high", "heavy"),
     # --- 双变量检验（探测序列间有向信息流，现有单变量检验完全不具备的维度）---
     "transfer_entropy": (t_transfer_entropy, "high", "heavy"),
+    "ccm":            (t_ccm, "high", "heavy"),
+    "granger":        (t_granger_causality, "high", "heavy"),
 }
 
 # 双变量检验标记：这些 test_fn 签名为 fn(x_source, x_target, **params) 而非 fn(x, **params)
-BIVARIATE_TESTS = {"transfer_entropy"}
+BIVARIATE_TESTS = {"transfer_entropy", "ccm", "granger"}
 
 # ---------------------------------------------------------------------------
 # 2a. 零假设类型路由 (TEST_SUR_TYPE)
@@ -690,6 +897,8 @@ TEST_SUR_TYPE = {
     "sample_entropy": "shuffle",
     "multiscale_se":  "shuffle",
     "transfer_entropy": "shuffle",   # 双变量：打乱时间耦合（保留边际分布）
+    "ccm":            "shuffle",       # CCM：打乱 X-Y 时序对齐（保留各自边际）
+    "granger":        "shuffle",       # Granger：打乱 X-Y 时序对齐（保留各自边际）
     # 谱/自相关类检验：AAFT 仅随机化相位、会保留功率谱与自相关，对周期性/线性时序结构
     # 完全失明(阳性对照证实 fft_peak 在 aaft 下 p=0.92，在 shuffle 下 p=0.005)。必须用
     # shuffle(彻底打乱时间次序) 才有判别力——否则"无结构"结论可能是漏掉周期性的假阴性。
@@ -1138,6 +1347,116 @@ def spectral_scan(reds, blues, rng, k_sur=25, k_fft=2500,
         "verdict": verdict, "n": len(evals),
         "best_eval": evals[bi],
     }
+
+
+def causal_scan(reds, blues, rng, k_sur=10):
+    """双向因果耦合扫描：直接对"红蓝"两组聚合信号跑 CCM + Granger，避免全枚举爆炸。
+
+    与 spectral_scan 分离的原因：CCM 嵌入+近邻搜索是 O(N²×E×L)，对 23 信号全枚举
+    会跑 ~40+ 分钟。本函数只对 4 个"有因果意义"的(源→目标)配对跑：
+        red_sum → blue      （红球和是否含蓝球信息）
+        red_mean → blue     （红球均值是否含蓝球信息）
+        blue    → red_sum   （蓝球是否含红球和信息的反向因果）
+        blue    → red_mean  （蓝球是否含红球均值信息的反向因果）
+    注意：**不含自环**(blue→blue / red→red)——后者 source==target 会人为制造高 ρ，
+    对"耦合"零假设无意义且会污染 ccm_rho_max 报表。
+
+    零假设 = 联合 shuffle（对 source/target 施加同一随机排列，保留各自边际分布但
+    彻底破坏 X→Y 的时序信息流）。observed 统计量在 surrogate 分布中的秩 → p_raw，
+    再对全部 evals 做 BH-FDR。
+
+    返回 dict（与 spectral_scan 同 schema）：
+        evals, q_min, p_min, best_sig, best_test, verdict, n
+        + ccm_rho_max, granger_f_max (各自最大统计量，仅来自真实跨向配对)
+    """
+    r = np.asarray(reds, float); b = np.asarray(blues, float)
+    red_sum = r.sum(axis=1)
+    red_mean = r.mean(axis=1)
+    blue = b.ravel()
+    # (源名, 源数组, 目标名, 目标数组) —— 全部为"跨信号"配对，无自环
+    pairs = [
+        ("red_sum",  red_sum,  "blue", blue),
+        ("red_mean", red_mean, "blue", blue),
+        ("blue",     blue,     "red_sum",  red_sum),
+        ("blue",     blue,     "red_mean", red_mean),
+    ]
+    evals = []
+    for sname, sarr, tname, tarr in pairs:
+        n = min(len(sarr), len(tarr))
+        sarr, tarr = sarr[:n], tarr[:n]
+        # 观察值
+        rho_obs = t_ccm(sarr, tarr)
+        f_obs = t_granger_causality(sarr, tarr)
+        # 联合 shuffle 零假设：同一排列施加于 source 与 target
+        s_rho, s_f = [], []
+        for _ in range(int(k_sur)):
+            idx = rng.permutation(n)
+            rv = t_ccm(sarr[idx], tarr[idx])
+            fv = t_granger_causality(sarr[idx], tarr[idx])
+            if math.isfinite(rv):
+                s_rho.append(rv)
+            if math.isfinite(fv):
+                s_f.append(fv)
+        # CCM evals
+        if math.isfinite(rho_obs) and len(s_rho) > 0:
+            s_rho = np.array(s_rho)
+            p_rho = (1.0 + np.sum(s_rho >= rho_obs)) / (1.0 + s_rho.size)
+            evals.append({
+                "sig": f"{sname}->{tname}", "test": "ccm", "tier": "heavy",
+                "direction": "high", "params": {"_reorder": "identity"},
+                "sur_type": "shuffle", "stat": float(rho_obs),
+                "sur_mean": float(s_rho.mean()), "sur_std": float(s_rho.std()),
+                "z": 0.0, "p_raw": float(p_rho), "k_sur": int(s_rho.size),
+                "sur_max": float(s_rho.max()), "sur_min": float(s_rho.min()),
+            })
+        # Granger evals
+        if math.isfinite(f_obs) and len(s_f) > 0:
+            s_f = np.array(s_f)
+            p_f = (1.0 + np.sum(s_f >= f_obs)) / (1.0 + s_f.size)
+            evals.append({
+                "sig": f"{sname}->{tname}", "test": "granger", "tier": "heavy",
+                "direction": "high", "params": {"_reorder": "identity"},
+                "sur_type": "shuffle", "stat": float(f_obs),
+                "sur_mean": float(s_f.mean()), "sur_std": float(s_f.std()),
+                "z": 0.0, "p_raw": float(p_f), "k_sur": int(s_f.size),
+                "sur_max": float(s_f.max()), "sur_min": float(s_f.min()),
+            })
+
+    if not evals:
+        return {"evals": [], "q_min": 1.0, "p_min": 1.0,
+                "best_sig": None, "best_test": None, "verdict": "无可用评估",
+                "n": 0, "ccm_rho_max": None, "granger_f_max": None}
+
+    pvals = np.array([e["p_raw"] for e in evals])
+    qs = bh_fdr(pvals)
+    for e, q in zip(evals, qs):
+        e["q"] = float(q)
+
+    order = sorted(range(len(evals)), key=lambda i: evals[i]["p_raw"])
+    bi = order[0]
+    q_min = float(qs.min())
+    p_min = float(evals[bi]["p_raw"])
+
+    if q_min < 0.05:
+        verdict = "显著(<0.05)"
+    elif q_min < 0.2:
+        verdict = "边缘"
+    else:
+        verdict = "随机区间"
+
+    # 提取各检验的最大原始统计量
+    ccm_rhos = [e["stat"] for e in evals if e.get("test") == "ccm" and np.isfinite(e.get("stat", np.nan))]
+    granger_fs = [e["stat"] for e in evals if e.get("test") == "granger" and np.isfinite(e.get("stat", np.nan))]
+
+    return {
+        "evals": evals,
+        "q_min": q_min, "p_min": p_min,
+        "best_sig": evals[bi]["sig"], "best_test": evals[bi]["test"],
+        "verdict": verdict, "n": len(evals),
+        "ccm_rho_max": float(max(ccm_rhos)) if ccm_rhos else None,
+        "granger_f_max": float(max(granger_fs)) if granger_fs else None,
+    }
+
 
 # ---------------------------------------------------------------------------
 # 6. 演化搜索

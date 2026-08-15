@@ -150,6 +150,15 @@ def build(s):
     spectral_oot_above = bool(s.get("spectral_oot_above"))
     spec_ok = bool(s.get("spectral_alert"))   # 仅 OOT 确认的谱结构才算"通过"
 
+    # 因果耦合字段（从 spectral_scan 的 evals 中提取 ccm/granger 最佳）
+    causal_best = s.get("causal_q_min")
+    causal_sig = s.get("causal_best_sig")
+    causal_test = s.get("causal_best_test")
+    causal_p = s.get("causal_p_min")
+    ccm_rho = s.get("ccm_rho_max")
+    granger_f = s.get("granger_f_max")
+    causal_ok = (causal_best is not None and causal_best < 0.05)
+
     three_cars = f"""
     <table class="cars">
       <tr><th>车辆</th><th>角色</th><th>模式</th><th>状态</th></tr>
@@ -226,6 +235,7 @@ def build(s):
     {kpi_card("样本外方向准确率", _num(oos_acc,3), f"随机基线 {_num(oos_sur,3)} · p={_num(oos_p,4)}", "#ffb454", ok=oos_ok)}
     {kpi_card("OOT 盲测命中率", _num(oot_hit,3), f"冻结规则盲打未来 · p={_num(oot_p,4)} · n={oot_n} (需结构FDR显著方作数)", "#ff8fab", ok=oot_ok)}
     {kpi_card("谱扫描筛查 q", _num(spectral_q,4), f"{spectral_n}组合枚举 · 秩FDR {_num(spectral_q_rank,4)} · 最强 {_esc(spectral_sig or '—')}/{_esc(spectral_test or '—')} · z峰值 {_num(spectral_z,1)}" + (f" · OOT p={_num(spectral_oot_p,4)}{'✓' if spectral_oot_above else ''}" if spectral_oot_p is not None else " · (OOT未触发)"), "#ffd166", ok=spec_ok)}
+    {kpi_card("因果耦合 (CCM/Granger)", _num(causal_best,4) if causal_best is not None else "—", f"最强 {_esc(causal_sig or '—')}/{_esc(causal_test or '—')} · CCM ρ={_num(ccm_rho,3) if ccm_rho is not None else '—'} · Granger F={_num(granger_f,3) if granger_f is not None else '—'}" + (f" · p={_num(causal_p,4)}" if causal_p is not None else ""), "#c77dff", ok=causal_ok)}
     {kpi_card("零假设交叉一致", "是" if consistent else "否", f"primary({_esc(cpt)})={_num(cp,4) if cp is not None else '—'}", "#3ddc84" if consistent else "#ff6b6b", ok=cross_ok)}
     {kpi_card("ALERT", "触发" if alert else "未触发", f"门槛 q&lt;{ALERT_Q} & OOS p&lt;{OOS_P}", "#3ddc84" if alert else "#ff6b6b", ok=alert)}
     {kpi_card("前瞻样本", f"{n_issues} 期", f"最新 {_esc(last_issue)} · 本轮新增 {added}", "#a78bfa")}

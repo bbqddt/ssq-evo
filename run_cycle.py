@@ -30,6 +30,9 @@ STATE = os.path.join(DATA_DIR, "state.json")
 # ---- 可调参数（部署时可改 config.json）----
 DEFAULT_CFG = {
     "epochs": 6, "pop": 24, "k_light": 25, "k_heavy": 10,
+    "k_causal": 50,   # 因果扫描专用 surrogate 数：8 个方向×检验下, k=25 的 p 地板 1/26≈0.038
+                      # 经 BH-FDR(8检验) 后 q 仅 0.051(勉强不过 0.05)。提到 50 使 p 地板 1/51≈0.0196,
+                      # 强耦合可被判 q<0.05, 既保留"真实数据仍稳 null"又证明闸门有检出功效。
     "seed": 20260813, "oos_frac": 0.2, "alert_q": 0.01, "alert_oos_p": 0.01,
 }
 FDR_Q = 0.05          # 结构显著的 FDR 门槛（与看板一致）
@@ -219,6 +222,8 @@ def main():
     #     补全"演化因随机搜索漏掉某具体 (信号,检验) 组合"这一盲区（阳性对照中周期17即此例）。
     rng_scan = np.random.default_rng(cfg["seed"] + N + 7)  # 独立种子，避免与演化相关
     spec = E.spectral_scan(reds, blues, rng_scan, k_sur=cfg["k_light"])
+    # 独立因果耦合扫描（双向 4 配对 × {CCM,Granger}；用更高 k_causal 保证检出功效）
+    caus = E.causal_scan(reds, blues, rng_scan, k_sur=cfg["k_causal"])
     # 合并进主 FDR 池（按基因组去重），使 best_q 反映"演化 + 扫描"的最强证据
     seen_keys = set()
     for e in all_evals:
@@ -230,6 +235,13 @@ def main():
             all_evals.append(e)
     print(f"[cycle] 谱扫描: 测试 {spec['n']} 组合, q_min={spec['q_min']:.4g}, "
           f"最强={spec['best_sig']}/{spec['best_test']} (p={spec['p_min']:.4g}, {spec['verdict']})")
+    for e in caus["evals"]:
+        k = E.genome_key(e["sig"], e["test"], e.get("params", {}))
+        if k not in seen_keys:
+            seen_keys.add(k)
+            all_evals.append(e)
+    print(f"[cycle] 因果扫描: 测试 {caus['n']} 组合, q_min={caus['q_min']:.4g}, "
+          f"最强={caus['best_sig']}/{caus['best_test']} (p={caus['p_min']:.4g}, {caus['verdict']})")
 
     # 3. FDR (跨全部评估)
     pvals = np.array([e["p_raw"] for e in all_evals])
@@ -252,9 +264,12 @@ def main():
     oos_p = None
     lb_items = sorted(leaderboard.values(), key=lambda e: e["p_raw"])
     if lb_items:
-        # 全局最优（演化 + 谱扫描合并池后的最低 FDR q）；OOS/OOT/交叉验证都针对它，
-        # 这样谱扫描独立检出的结构也会被同样严格的样本外闸门裁决。
-        top = best
+        # OOS/方向准确率/交叉零假设/OOT 验证只针对"单变量结构"候选(演化+谱扫描)，
+        # 不含双变量因果耦合检验(CCM/Granger 不是可外推的方向预测公式, 且无单变量信号构造器)。
+        # 这样谱扫描独立检出的结构仍会被同样严格的样本外闸门裁决, 而因果检验只参与 FDR 池。
+        _causal = {"ccm", "granger"}
+        _sv = [e for e in all_evals if e["test"] not in _causal]
+        top = min(_sv, key=lambda e: e["q"]) if _sv else best
         oos = E.out_of_sample(top, reds, blues, rng, frac=cfg["oos_frac"], k_sur=cfg["k_light"])
         oos_p = oos
 
@@ -382,6 +397,10 @@ def main():
         "spectral_oot_above": bool(spectral_oot and spectral_oot["above_random"]),
         "spectral_oot_n": (spectral_oot["n"] if spectral_oot else 0),
         "spectral_alert": spectral_alert,
+        # 因果耦合（独立轻量扫描）
+        "causal_q_min": caus["q_min"], "causal_p_min": caus["p_min"],
+        "causal_best_sig": caus["best_sig"], "causal_best_test": caus["best_test"],
+        "ccm_rho_max": caus.get("ccm_rho_max"), "granger_f_max": caus.get("granger_f_max"),
         "alert": bool(alert),
         "n_eval": len(all_evals), "n_unique": len(leaderboard),
         "coverage": fr["coverage"], "elite_count": len(fr["elites"]),
