@@ -13,6 +13,7 @@ engine:
     k_light: 100       # 轻量检验 surrogate 数 (对齐原 config.json 活跃值)
     k_heavy: 60        # 重型检验 surrogate 数
     k_causal: 50       # 因果扫描专用(8方向×检验下需更高分辨率保证检出功效)
+    k_nonstat: 300     # 非平稳监控 surrogate 数 (49球×2检验; 动量 FDR 分辨率略不足, 真实数据本就 null)
 
   gates:
     fdr_q: 0.05        # 结构显著 FDR 门槛

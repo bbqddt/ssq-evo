@@ -159,6 +159,18 @@ def build(s):
     granger_f = s.get("granger_f_max")
     causal_ok = (causal_best is not None and causal_best < 0.05)
 
+    # 非平稳 / 物理磨损监控闸门字段
+    ns_n_drift = s.get("ns_n_sig_drift")
+    ns_n_mom = s.get("ns_n_sig_mom")
+    ns_best_drift_sig = s.get("ns_best_drift_sig")
+    ns_best_drift_val = s.get("ns_best_drift_val")
+    ns_best_drift_q = s.get("ns_best_drift_q")
+    ns_best_mom_sig = s.get("ns_best_mom_sig")
+    ns_best_mom_val = s.get("ns_best_mom_val")
+    ns_best_mom_q = s.get("ns_best_mom_q")
+    ns_verdict = s.get("ns_verdict")
+    ns_ok = bool(ns_n_drift == 0 and ns_n_mom == 0)   # 无显著非平稳 = 闸门干净
+
     three_cars = f"""
     <table class="cars">
       <tr><th>车辆</th><th>角色</th><th>模式</th><th>状态</th></tr>
@@ -236,6 +248,7 @@ def build(s):
     {kpi_card("OOT 盲测命中率", _num(oot_hit,3), f"冻结规则盲打未来 · p={_num(oot_p,4)} · n={oot_n} (需结构FDR显著方作数)", "#ff8fab", ok=oot_ok)}
     {kpi_card("谱扫描筛查 q", _num(spectral_q,4), f"{spectral_n}组合枚举 · 秩FDR {_num(spectral_q_rank,4)} · 最强 {_esc(spectral_sig or '—')}/{_esc(spectral_test or '—')} · z峰值 {_num(spectral_z,1)}" + (f" · OOT p={_num(spectral_oot_p,4)}{'✓' if spectral_oot_above else ''}" if spectral_oot_p is not None else " · (OOT未触发)"), "#ffd166", ok=spec_ok)}
     {kpi_card("因果耦合 (CCM/Granger)", _num(causal_best,4) if causal_best is not None else "—", f"最强 {_esc(causal_sig or '—')}/{_esc(causal_test or '—')} · CCM ρ={_num(ccm_rho,3) if ccm_rho is not None else '—'} · Granger F={_num(granger_f,3) if granger_f is not None else '—'}" + (f" · p={_num(causal_p,4)}" if causal_p is not None else ""), "#c77dff", ok=causal_ok)}
+    {kpi_card("非平稳监控 (磨损/动量)", ("NULL" if ns_ok else "异常"), f"漂移显著 {ns_n_drift or 0} 球 · 动量 {ns_n_mom or 0} 球 · 最强漂移 {_esc(ns_best_drift_sig or '—')}={_num(ns_best_drift_val,4)} q={_num(ns_best_drift_q,4)} · 最强动量 {_esc(ns_best_mom_sig or '—')}={_num(ns_best_mom_val,4)} q={_num(ns_best_mom_q,4)}", "#9aa0ff", ok=ns_ok)}
     {kpi_card("零假设交叉一致", "是" if consistent else "否", f"primary({_esc(cpt)})={_num(cp,4) if cp is not None else '—'}", "#3ddc84" if consistent else "#ff6b6b", ok=cross_ok)}
     {kpi_card("ALERT", "触发" if alert else "未触发", f"门槛 q&lt;{ALERT_Q} & OOS p&lt;{OOS_P}", "#3ddc84" if alert else "#ff6b6b", ok=alert)}
     {kpi_card("前瞻样本", f"{n_issues} 期", f"最新 {_esc(last_issue)} · 本轮新增 {added}", "#a78bfa")}

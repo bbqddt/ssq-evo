@@ -22,6 +22,7 @@ import engine_core as E
 import data as D
 import store as S
 import frontier as F
+import nonstationarity as NS
 
 MASTER = os.path.join(DATA_DIR, "ssq_master.csv")
 DB = os.path.join(DATA_DIR, "ssq_evo.db")
@@ -250,6 +251,16 @@ def main():
     print(f"[cycle] 因果扫描: 测试 {caus['n']} 组合, q_min={caus['q_min']:.4g}, "
           f"最强={caus['best_sig']}/{caus['best_test']} (p={caus['p_min']:.4g}, {caus['verdict']})")
 
+    # 3b. 非平稳性 / 物理磨损监控闸门（方向1）：每球频率随时间漂移 + 短期动量
+    #     与演化/谱/因果 FDR 池分离——它测的是"单球边际频率的时间非平稳"，
+    #     单位不同，混入主池会污染 BH-FDR。独立成门，单独报告 verdict。
+    rng_ns = np.random.default_rng(cfg["seed"] + N + 13)
+    ns = NS.ball_drift_scan(reds, blues, rng_ns, k_sur=cfg.get("k_nonstat", 300))
+    bd = ns["best_drift"]; bm = ns["best_mom"]
+    print(f"[cycle] 非平稳监控: 漂移显著 {ns['n_sig_drift']} 球 | 动量 {ns['n_sig_mom']} 球"
+          f" | 最强漂移 {bd[0]}{bd[1]} q={ns['best_q_drift']:.4g}"
+          f" | 最强动量 {bm[0]}{bm[1]} q={ns['best_q_mom']:.4g}")
+
     # 3. FDR (跨全部评估)
     pvals = np.array([e["p_raw"] for e in all_evals])
     qs = E.bh_fdr(pvals)
@@ -408,6 +419,13 @@ def main():
         "causal_q_min": caus["q_min"], "causal_p_min": caus["p_min"],
         "causal_best_sig": caus["best_sig"], "causal_best_test": caus["best_test"],
         "ccm_rho_max": caus.get("ccm_rho_max"), "granger_f_max": caus.get("granger_f_max"),
+        # 非平稳 / 物理磨损监控闸门（独立成门，不混入主 FDR 池）
+        "ns_n_sig_drift": ns["n_sig_drift"], "ns_n_sig_mom": ns["n_sig_mom"],
+        "ns_best_drift_sig": f"{bd[0]}{bd[1]}", "ns_best_drift_val": round(bd[2], 4),
+        "ns_best_drift_q": round(ns["best_q_drift"], 4),
+        "ns_best_mom_sig": f"{bm[0]}{bm[1]}", "ns_best_mom_val": round(bm[4], 4),
+        "ns_best_mom_q": round(ns["best_q_mom"], 4),
+        "ns_verdict": ns["verdict"], "ns_k_sur": ns["k_sur"],
         "alert": bool(alert),
         "n_eval": len(all_evals), "n_unique": len(leaderboard),
         "coverage": fr["coverage"], "elite_count": len(fr["elites"]),
