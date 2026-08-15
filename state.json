@@ -1,9 +1,9 @@
 {
-  "updated": "2026-08-15 21:28:46",
+  "updated": "2026-08-15 22:06:08",
   "n_issues": 3490,
   "last_issue": "26093",
   "added": 0,
-  "cycle_id": 53,
+  "cycle_id": 54,
   "best_q": 0.1661951909476662,
   "best_sig": "red_recurrence_mean",
   "best_test": "mi_max",
@@ -90,6 +90,8 @@
     "diff_formula_k_sur": 25,
     "diff_formula_n_steps": 12,
     "diff_formula_wf_k_sur": 25,
+    "redteam_audit_enabled": false,
+    "redteam_out": "audit",
     "http_port": 8088,
     "schedule_hours": 0.25
   },
@@ -423,6 +425,12 @@
   ],
   "history": [
     {
+      "ts": "2026-08-15 22:06:08",
+      "best_q": 0.1661951909476662,
+      "alert": true,
+      "coverage": 116
+    },
+    {
       "ts": "2026-08-15 21:28:46",
       "best_q": 0.1661951909476662,
       "alert": true,
@@ -742,8 +750,10 @@
     }
   ],
   "self_check": {
-    "score": 0,
-    "warnings": [],
-    "ts": "2026-08-15 21:28:46"
+    "score": 2,
+    "warnings": [
+      "Dockerfile 漏拷生产文件: ['redteam_audit.py']"
+    ],
+    "ts": "2026-08-15 22:06:08"
   }
 }
