@@ -32,7 +32,7 @@ engine:
   # 注：配置加载器把嵌套 dict 扁平化为「叶子键」（不保留父级名），故叶子键须带
   # diff_formula_ 前缀以与 cache.enabled 等区分，避免被 cache_enabled 重映射吞掉。
   diff_formula:
-    diff_formula_enabled: false
+    diff_formula_enabled: true
     diff_formula_candidates: 6       # 每轮生成的候选数
     diff_formula_k_sur: 25           # 发现段优化用 surrogate 数（z 分数目标不触地板，无需过高）
     diff_formula_n_steps: 12         # 局部坐标精炼步数
