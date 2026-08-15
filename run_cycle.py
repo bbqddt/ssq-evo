@@ -81,20 +81,18 @@ def self_check(state, acc, cfg):
             warns.append(f"OOT 盲测样本量过小(n={oot_n}<30)，统计量不足")
             score += 1
 
-    # 2) 配置一致性（源 vs 运行时）
-    src_cfg = os.path.join(HERE, "config.json")
-    run_cfg = os.path.join(DATA_DIR, "config.json")
-    if os.path.exists(src_cfg) and os.path.exists(run_cfg):
-        try:
-            sc = json.load(open(src_cfg, encoding="utf-8"))
-            rc = json.load(open(run_cfg, encoding="utf-8"))
-            for key in ("k_light", "k_heavy", "schedule_hours", "epochs"):
-                sv, rv = sc.get(key), rc.get(key)
-                if sv != rv:
-                    warns.append(f"配置漂移: {key} 源={sv} vs 运行时={rv}(容器可能用了旧配置)")
-                    score += 2
-        except Exception:
-            pass
+    # 2) 配置一致性（canonical YAML 源 vs 运行时合并值）
+    try:
+        sys.path.insert(0, HERE)
+        from configs import load_engine_config
+        canon = load_engine_config()
+        for key in ("k_light", "k_heavy", "epochs", "pop", "k_causal", "oos_frac"):
+            cv, rv = canon.get(key), cfg.get(key)
+            if cv is not None and rv is not None and cv != rv:
+                warns.append(f"配置漂移: {key} YAML源={cv} vs 运行时={rv}(config.json 可能覆盖了 YAML)")
+                score += 2
+    except Exception:
+        pass
 
     # 3) Dockerfile COPY 完整性（只检查本项目 .py 文件是否漏拷）
     df = os.path.join(HERE, "Dockerfile")
@@ -170,10 +168,19 @@ def self_check(state, acc, cfg):
 
 
 def load_cfg():
+    cfg = dict(DEFAULT_CFG)
+    # 1) 外部化 YAML（configs/engine.yaml）作为引擎参数的 canonical 源
+    try:
+        sys.path.insert(0, HERE)
+        from configs import load_engine_config
+        cfg.update(load_engine_config())
+    except Exception:
+        pass
+    # 2) 兼容旧 config.json（仅部署键如 http_port/schedule_hours 应留在此；
+    #    引擎键若仍存在会覆盖 YAML，便于平滑迁移）
     p = os.path.join(DATA_DIR, "config.json")
     if not os.path.exists(p):
         p = os.path.join(HERE, "config.json")   # 回退到代码目录
-    cfg = dict(DEFAULT_CFG)
     if os.path.exists(p):
         cfg.update(json.load(open(p, encoding="utf-8")))
     return cfg

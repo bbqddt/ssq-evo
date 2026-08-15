@@ -494,26 +494,6 @@ def t_rq_determinism(x, m=2, r_factor=None, r=None, sub=600):
         det += lengths[lengths >= 2].sum()
     return float(det / total)  # 随机低；确定性高 -> 'high'
 
-def t_lyap_rosenstein(x, m=2, tau=1, sub=600):
-    x = np.asarray(x, float)
-    n = len(x)
-    if n > sub:
-        x = x[:sub]
-        n = len(x)
-    M = n - (m - 1) * tau
-    if M < 50:
-        return np.nan
-    emb = np.array([x[i:i + m * tau:tau] for i in range(M)])
-    from scipy.spatial.distance import cdist
-    D = cdist(emb, emb, metric="euclidean")         # (M,M) 距离矩阵，C 实现
-    np.fill_diagonal(D, np.inf)
-    j = np.argmin(D, axis=1)
-    fi = np.arange(M)
-    mask = (fi + tau < M) & (j + tau < M)
-    num = np.sqrt(((emb[fi[mask] + tau] - emb[j[mask] + tau]) ** 2).sum(axis=1))
-    den = D[fi[mask], j[mask]]
-    return float(np.mean(np.log((num + 1e-12) / (den + 1e-12))))  # 随机 ~0/负；确定性正 -> 'high'
-
 def _sample_entropy(x, m, r):
     """Sample Entropy（Richman-Moorman）：m 维模板的不可预测性；随机序列大、确定性小。"""
     x = np.asarray(x, float); n = len(x)
@@ -864,13 +844,12 @@ TESTS = {
     "acf_max":    (t_acf_max, "high", "light"),
     "dfa_alpha":  (t_dfa_alpha, "high", "light"),
     "mi_max":     (t_mi_max, "high", "light"),
-    "corr_dim_slope": (t_corr_dim_slope, "high", "heavy"),
+    "corr_dim_slope": (t_corr_dim_slope, "low", "heavy"),
     "perm_entropy": (t_perm_entropy, "low", "heavy"),
     "approx_entropy": (t_approx_entropy, "low", "heavy"),
     "rq_determinism": (t_rq_determinism, "high", "heavy"),
-    "lyap":       (t_lyap_rosenstein, "high", "heavy"),
     "sample_entropy": (t_sample_entropy, "low", "heavy"),
-    "multiscale_se":  (t_multiscale_se, "high", "heavy"),
+    "multiscale_se":  (t_multiscale_se, "low", "heavy"),
     # --- 双变量检验（探测序列间有向信息流，现有单变量检验完全不具备的维度）---
     "transfer_entropy": (t_transfer_entropy, "high", "heavy"),
     "ccm":            (t_ccm, "high", "heavy"),
@@ -893,7 +872,6 @@ TEST_SUR_TYPE = {
     "perm_entropy":   "shuffle",
     "approx_entropy": "shuffle",
     "rq_determinism": "shuffle",
-    "lyap":           "shuffle",
     "sample_entropy": "shuffle",
     "multiscale_se":  "shuffle",
     "transfer_entropy": "shuffle",   # 双变量：打乱时间耦合（保留边际分布）
@@ -923,7 +901,6 @@ PARAM_SCHEMA = {
     "perm_entropy":   {"order": (2, 5, 1), "delay": (1, 3, 1)},
     "approx_entropy": {"m": (1, 3, 1), "r_factor": (0.10, 0.40, 0.05)},
     "rq_determinism": {"m": (2, 4, 1), "r_factor": (0.05, 0.30, 0.05)},
-    "lyap":           {"m": (2, 4, 1), "tau": (1, 3, 1)},
     "sample_entropy": {"m": (1, 3, 1), "r_factor": (0.10, 0.40, 0.05)},
     "multiscale_se":  {"m": (1, 3, 1), "r_factor": (0.10, 0.40, 0.05), "tau_max": (3, 6, 1)},
     "transfer_entropy": {"k_history": (1, 3, 1), "bins": (4, 10, 1)},

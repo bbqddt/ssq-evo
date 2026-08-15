@@ -1,0 +1,20 @@
+# ssq_evo 引擎超参配置（外部化）
+# 取代 run_cycle.py 内联 DEFAULT_CFG。改这里即可调参，无需动代码。
+# 加载器: configs/loader.py (零依赖; 优先 pyyaml, 缺失回退手写解析)
+
+engine:
+  evolution:
+    epochs: 7          # 演化代数 (对齐原 config.json 活跃值)
+    pop: 32            # 种群规模
+    seed: 20260813     # 随机种子
+    oos_frac: 0.2      # 样本外验证占比
+
+  surrogate:
+    k_light: 100       # 轻量检验 surrogate 数 (对齐原 config.json 活跃值)
+    k_heavy: 60        # 重型检验 surrogate 数
+    k_causal: 50       # 因果扫描专用(8方向×检验下需更高分辨率保证检出功效)
+
+  gates:
+    fdr_q: 0.05        # 结构显著 FDR 门槛
+    alert_q: 0.01      # ALERT 闸门 q 阈值
+    alert_oos_p: 0.01  # ALERT 闸门 OOS p 阈值
