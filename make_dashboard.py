@@ -136,6 +136,20 @@ def build(s):
     oot_above = bool(s.get("oot_above"))
     oot_ok = (oot_above and q < FDR_Q)
 
+    # 直接谱扫描兜底闸门（独立于演化）
+    spectral_q = s.get("spectral_q", 1.0)
+    spectral_q_rank = s.get("spectral_q_rank", 1.0)
+    spectral_p = s.get("spectral_p", 1.0)
+    spectral_sig = s.get("spectral_best_sig")
+    spectral_test = s.get("spectral_best_test")
+    spectral_verdict = s.get("spectral_verdict", "—")
+    spectral_n = s.get("spectral_n", 0)
+    spectral_z = s.get("spectral_z_min", 0.0)
+    spectral_oot_hit = s.get("spectral_oot_hit")
+    spectral_oot_p = s.get("spectral_oot_p")
+    spectral_oot_above = bool(s.get("spectral_oot_above"))
+    spec_ok = bool(s.get("spectral_alert"))   # 仅 OOT 确认的谱结构才算"通过"
+
     three_cars = f"""
     <table class="cars">
       <tr><th>车辆</th><th>角色</th><th>模式</th><th>状态</th></tr>
@@ -211,6 +225,7 @@ def build(s):
     {kpi_card("coverage (评估算子数)", str(s.get('coverage','?')), f"精英 {s.get('elite_count','?')} · 唯一 {s.get('n_unique','?')}", "#4ea1ff")}
     {kpi_card("样本外方向准确率", _num(oos_acc,3), f"随机基线 {_num(oos_sur,3)} · p={_num(oos_p,4)}", "#ffb454", ok=oos_ok)}
     {kpi_card("OOT 盲测命中率", _num(oot_hit,3), f"冻结规则盲打未来 · p={_num(oot_p,4)} · n={oot_n} (需结构FDR显著方作数)", "#ff8fab", ok=oot_ok)}
+    {kpi_card("谱扫描筛查 q", _num(spectral_q,4), f"{spectral_n}组合枚举 · 秩FDR {_num(spectral_q_rank,4)} · 最强 {_esc(spectral_sig or '—')}/{_esc(spectral_test or '—')} · z峰值 {_num(spectral_z,1)}" + (f" · OOT p={_num(spectral_oot_p,4)}{'✓' if spectral_oot_above else ''}" if spectral_oot_p is not None else " · (OOT未触发)"), "#ffd166", ok=spec_ok)}
     {kpi_card("零假设交叉一致", "是" if consistent else "否", f"primary({_esc(cpt)})={_num(cp,4) if cp is not None else '—'}", "#3ddc84" if consistent else "#ff6b6b", ok=cross_ok)}
     {kpi_card("ALERT", "触发" if alert else "未触发", f"门槛 q&lt;{ALERT_Q} & OOS p&lt;{OOS_P}", "#3ddc84" if alert else "#ff6b6b", ok=alert)}
     {kpi_card("前瞻样本", f"{n_issues} 期", f"最新 {_esc(last_issue)} · 本轮新增 {added}", "#a78bfa")}
@@ -253,9 +268,10 @@ def build(s):
   </div>
 
   <div class="note">本看板由 run_cycle 每轮自动生成，经 CloudStudio 部署到腾讯云。全部统计闸门
-    (BH-FDR 多重比较校正、AAFT/IAAFT/shuffle/twin 四零假设交叉、样本外验证、Out-of-Time 盲测)
-    均为预注册，不人为调高显著性。OOT 盲测将演化(前85%训练)与盲测(末段未来)彻底隔离，
-    是进化搜索防过拟合的终极诚信闸门。</div>
+    (BH-FDR 多重比较校正、AAFT/IAAFT/shuffle/twin 四零假设交叉、样本外验证、Out-of-Time 盲测、
+    <b>直接谱扫描兜底</b>) 均为预注册，不人为调高显著性。谱扫描枚举全部基信号 × 谱/自相关检验
+    （fft_peak/acf_max/dfa_alpha/mi_max），独立于演化搜索，补全"演化漏检具体 (信号,检验) 组合"盲区；
+    OOT 盲测将演化(前85%训练)与盲测(末段未来)彻底隔离，是进化搜索防过拟合的终极诚信闸门。</div>
 </div></body></html>"""
     return html_doc
 

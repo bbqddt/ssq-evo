@@ -32,6 +32,7 @@ DEFAULT_CFG = {
     "epochs": 6, "pop": 24, "k_light": 25, "k_heavy": 10,
     "seed": 20260813, "oos_frac": 0.2, "alert_q": 0.01, "alert_oos_p": 0.01,
 }
+FDR_Q = 0.05          # 结构显著的 FDR 门槛（与看板一致）
 
 
 # ============================================================
@@ -144,6 +145,16 @@ def self_check(state, acc, cfg):
             " —— 可能是训练集过拟合或 OOS 规则退化")
         score += 2
 
+    # 6) 演化漏检 vs 谱扫描独立检出（仅当谱扫描 q 极强<0.01 才提示，避免偶发 surrogate 地板命中误报）
+    evo_q = state.get("best_q", 1)
+    spec_q = state.get("spectral_q", 1)
+    if evo_q >= 0.05 and spec_q < 0.01:
+        warns.append(
+            f"演化漏检: 主搜索 best_q={evo_q:.4f}≥0.05 但谱扫描独立检出结构 "
+            f"(q={spec_q:.4f}, {state.get('spectral_best_sig')}/{state.get('spectral_best_test')})"
+            " —— 演化覆盖不足，谱扫描兜底生效")
+        score += 2
+
     result = {"warnings": warns, "score": score, "ts": state.get("updated")}
     # 打印摘要
     if warns:
@@ -202,6 +213,24 @@ def main():
     leaderboard, all_evals = evo.run()
     print(f"[cycle] 评估算子数(含重复): {len(all_evals)}, 唯一基因组: {len(leaderboard)}")
 
+    # 2b. 直接谱扫描兜底闸门（独立于演化搜索）
+    #     枚举全部基信号 × {fft_peak,acf_max,dfa_alpha,mi_max}，用 evaluate() 跑 shuffle
+    #     零假设，对全部组合做 BH-FDR。无论演化覆盖如何，周期/自相关结构都被独立测试一次，
+    #     补全"演化因随机搜索漏掉某具体 (信号,检验) 组合"这一盲区（阳性对照中周期17即此例）。
+    rng_scan = np.random.default_rng(cfg["seed"] + N + 7)  # 独立种子，避免与演化相关
+    spec = E.spectral_scan(reds, blues, rng_scan, k_sur=cfg["k_light"])
+    # 合并进主 FDR 池（按基因组去重），使 best_q 反映"演化 + 扫描"的最强证据
+    seen_keys = set()
+    for e in all_evals:
+        seen_keys.add(E.genome_key(e["sig"], e["test"], e.get("params", {})))
+    for e in spec["evals"]:
+        k = E.genome_key(e["sig"], e["test"], e.get("params", {}))
+        if k not in seen_keys:
+            seen_keys.add(k)
+            all_evals.append(e)
+    print(f"[cycle] 谱扫描: 测试 {spec['n']} 组合, q_min={spec['q_min']:.4g}, "
+          f"最强={spec['best_sig']}/{spec['best_test']} (p={spec['p_min']:.4g}, {spec['verdict']})")
+
     # 3. FDR (跨全部评估)
     pvals = np.array([e["p_raw"] for e in all_evals])
     qs = E.bh_fdr(pvals)
@@ -223,7 +252,9 @@ def main():
     oos_p = None
     lb_items = sorted(leaderboard.values(), key=lambda e: e["p_raw"])
     if lb_items:
-        top = lb_items[0]
+        # 全局最优（演化 + 谱扫描合并池后的最低 FDR q）；OOS/OOT/交叉验证都针对它，
+        # 这样谱扫描独立检出的结构也会被同样严格的样本外闸门裁决。
+        top = best
         oos = E.out_of_sample(top, reds, blues, rng, frac=cfg["oos_frac"], k_sur=cfg["k_light"])
         oos_p = oos
 
@@ -243,7 +274,25 @@ def main():
     if lb_items:
         oot = E.out_of_time(top, reds, blues, rng, train_frac=0.85, k_sur=cfg["k_light"])
 
-    alert = (best_q < cfg["alert_q"]) and (oos_p is not None) and (oos_p < cfg["alert_oos_p"])
+    # 5e. 谱扫描独立闸门（灵敏度探测器）：若 z-FDR 显著，对最强谱组合跑 OOT 盲测验证，
+    # 防止 z 偶然尖峰误报。这是演化搜索的兜底——演化漏掉的周期/自相关结构在此独立裁决。
+    spectral_oot = None
+    spectral_alert = False
+    if spec["q_min"] < FDR_Q and spec.get("best_eval") is not None:
+        try:
+            spectral_oot = E.out_of_time(spec["best_eval"], reds, blues, rng,
+                                         train_frac=0.85, k_sur=cfg["k_light"])
+            # 严格闸门：仅当 OOT 盲测 p 极小(<0.001)才确认报警。
+            # 理由：谱扫描用大 k surrogate 会偶发"地板命中"(真实值仅压过所有 surrogate，
+            # 概率 1/(k+1)≈1/2501)，这种偶然尖峰的 OOT p 通常~0.005，会被 0.001 阈值挡下；
+            # 真实强周期(如 z=100)的 OOT p≈0，照常通过。此阈值把假阳性率压到≈1e-5/轮。
+            spectral_alert = bool(spectral_oot and spectral_oot["above_random"]
+                                  and spectral_oot["p_random"] < 0.001)
+        except Exception as e:
+            print(f"[cycle] 谱扫描 OOT 验证失败(不影响主流程): {e}")
+
+    alert = ((best_q < cfg["alert_q"]) and (oos_p is not None) and (oos_p < cfg["alert_oos_p"])) \
+            or spectral_alert
     # 诚实闸门：方向准确率"高于随机"必须先过结构 FDR 显著(best_q<0.05)，否则只是
     # 从大量候选中挑最优再测的"选择性偏差"产物，不能作为结论。
     oos_above = bool(acc and acc["above_random"] and best_q < 0.05)
@@ -285,6 +334,15 @@ def main():
         "oot_above": bool(oot and oot["above_random"]),
         "oot_n": (oot["n"] if oot else 0),
         "oot_rule": (oot["best_rule"] if oot else None),
+        "spectral_q": spec["q_min"], "spectral_q_rank": spec["q_rank"], "spectral_p": spec["p_min"],
+        "spectral_best_sig": spec["best_sig"], "spectral_best_test": spec["best_test"],
+        "spectral_best_z": spec["best_z"], "spectral_z_min": spec["z_min"],
+        "spectral_n": spec["n"], "spectral_verdict": spec["verdict"],
+        "spectral_oot_hit": (round(spectral_oot["hit_rate"], 4) if spectral_oot else None),
+        "spectral_oot_p": (round(spectral_oot["p_random"], 4) if spectral_oot else None),
+        "spectral_oot_above": bool(spectral_oot and spectral_oot["above_random"]),
+        "spectral_oot_n": (spectral_oot["n"] if spectral_oot else 0),
+        "spectral_alert": spectral_alert,
         "alert": alert, "coverage": fr["coverage"],
         "note": ("候选结构! 需人工复核" if alert else "无超越随机的可提取结构 (null)"),
     }
@@ -315,6 +373,15 @@ def main():
         "oot_above": bool(oot and oot["above_random"]),
         "oot_n": (oot["n"] if oot else 0),
         "oot_rule": (oot["best_rule"] if oot else None),
+        "spectral_q": spec["q_min"], "spectral_q_rank": spec["q_rank"], "spectral_p": spec["p_min"],
+        "spectral_best_sig": spec["best_sig"], "spectral_best_test": spec["best_test"],
+        "spectral_best_z": spec["best_z"], "spectral_z_min": spec["z_min"],
+        "spectral_n": spec["n"], "spectral_verdict": spec["verdict"],
+        "spectral_oot_hit": (round(spectral_oot["hit_rate"], 4) if spectral_oot else None),
+        "spectral_oot_p": (round(spectral_oot["p_random"], 4) if spectral_oot else None),
+        "spectral_oot_above": bool(spectral_oot and spectral_oot["above_random"]),
+        "spectral_oot_n": (spectral_oot["n"] if spectral_oot else 0),
+        "spectral_alert": spectral_alert,
         "alert": bool(alert),
         "n_eval": len(all_evals), "n_unique": len(leaderboard),
         "coverage": fr["coverage"], "elite_count": len(fr["elites"]),

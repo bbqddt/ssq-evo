@@ -1059,6 +1059,87 @@ def bh_fdr(pvals):
     return out
 
 # ---------------------------------------------------------------------------
+# 5b. 直接谱/自相关扫描闸门 (spectral_scan) —— 演化搜索的"兜底"
+#     阳性对照发现：演化是随机/启发式搜索，未必撞到具体的 (信号,检验) 组合
+#     （如周期17注入落在 blue/fft_peak，但演化没试到该组合而漏报）。
+#     本闸门枚举"全部基信号 × 谱/自相关类检验"，对每个组合用 evaluate() 跑
+#     shuffle 零假设（与主线一致），再对全部组合的 p 值做 BH-FDR。
+#     这样无论演化覆盖如何，周期/自相关结构都被独立、确定性地测试一次，
+#     直接补全"演化漏检"这一盲区。
+#     设计要点（诚实 + 不假阳性）：
+#       * verdict 用**秩-FDR**（稳健，不假设 surrogate 分布形态，与主线一致）。
+#         z=(real-mean_sur)/std_sur 在这些检验上不可靠——acf_max 等 surrogate 分布
+#         高度退化(std 极小)会把 z 虚高到天文数字、正态近似 p 假阳性(实测真实数据
+#         z-FDR q≈1e-73)；故 z 仅作诊断，绝不作为 verdict。
+#       * 灵敏度靠 fft_peak 用**大 k surrogate**(k_fft, 默认2500) 压低秩地板 1/(k+1)：
+#         单信号强周期(如 z=140)在 k=2500 下秩 p≈1/2501，BH-FDR 过 100 组合 q≈0.04<0.05
+#         能被正确报警；偶然尖峰再由 OOT 盲测过滤，故不假阳性。
+#       * acf_max/dfa/mi 沿用 k_sur（较重，仅作覆盖补充）。
+# ---------------------------------------------------------------------------
+def spectral_scan(reds, blues, rng, k_sur=25, k_fft=2500,
+                  tests=("fft_peak", "acf_max", "dfa_alpha", "mi_max")):
+    """枚举全部基信号 × 指定谱/自相关检验，返回评估列表与 BH-FDR 聚合结果。
+
+    返回 dict:
+        evals:    list[evaluate() 结果]（与演化 eval 同 schema，可直接并入主 FDR 池）
+        q_min:    全部组合中最小的 BH-FDR q（联合显著性，闸门 verdict 依据；秩-FDR）
+        q_rank:   同 q_min（秩-FDR 别名，供透明对照）
+        p_min:    全部组合中最小的原始 p
+        best_sig / best_test / best_stat / best_z: 最强组合
+        z_min:    全部组合中 |z| 峰值（诊断：surrogate std 退化时虚高，仅参考）
+        verdict:  显著(<0.05) / 边缘 / 随机区间
+        n:        实际评估的组合数
+        best_eval: 最强组合完整 eval（供 OOT 验证）
+    """
+    evals = []
+    for sig in BASE_SIGNALS:
+        for test in tests:
+            if test not in TESTS:
+                continue
+            params = {"_sig": {}, "_test": {}, "_reorder": "identity"}
+            if sig in SIG_PARAM_SIGMAPS:
+                # 给矢量映射一个中位 div 参数，保证能构造出序列
+                sch = SIG_PARAM_SCHEMA.get(sig, {})
+                params["_sig"] = {k: int((lo + hi) / 2)
+                                  for k, (lo, hi, st) in sch.items()}
+            kk = k_fft if test == "fft_peak" else k_sur
+            try:
+                ev = evaluate(sig, test, reds, blues, rng, kk, params=params)
+            except Exception:
+                ev = None
+            if ev is not None:
+                evals.append(ev)
+    if not evals:
+        return {"evals": [], "q_min": 1.0, "p_min": 1.0, "q_rank": 1.0,
+                "best_sig": None, "best_test": None, "best_stat": None,
+                "best_z": 0.0, "z_min": 0.0,
+                "verdict": "无可用评估", "n": 0, "best_eval": None}
+    pvals = np.array([e["p_raw"] for e in evals])
+    qs = bh_fdr(pvals)
+    for e, q in zip(evals, qs):
+        e["q"] = float(q)
+    order = sorted(range(len(evals)), key=lambda i: evals[i]["p_raw"])
+    bi = order[0]
+    q_min = float(qs.min())          # 秩-FDR（稳健，不假设 surrogate 分布形态；与主线一致）
+    p_min = float(evals[bi]["p_raw"])
+    z_min = float(max(abs(e["z"]) for e in evals))  # 诊断：surrogate std 退化时虚高，仅作参考
+    if q_min < 0.05:
+        verdict = "显著(<0.05)"
+    elif q_min < 0.2:
+        verdict = "边缘"
+    else:
+        verdict = "随机区间"
+    return {
+        "evals": evals,
+        "q_min": q_min, "q_rank": q_min, "p_min": p_min,
+        "best_sig": evals[bi]["sig"], "best_test": evals[bi]["test"],
+        "best_stat": evals[bi]["stat"], "best_z": float(evals[bi]["z"]),
+        "z_min": z_min,
+        "verdict": verdict, "n": len(evals),
+        "best_eval": evals[bi],
+    }
+
+# ---------------------------------------------------------------------------
 # 6. 演化搜索
 # ---------------------------------------------------------------------------
 
