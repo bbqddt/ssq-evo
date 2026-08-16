@@ -278,6 +278,59 @@ def _mark_scored(issue, result):
         f.write("\n".join(out) + "\n")
 
 
+def _summarize_scored():
+    """累计汇总：让长期观察公式驱动 vs 随机基线变得直观。"""
+    preds = load_preds()
+    sc = [p for p in preds if p.get("scored") and p.get("result")]
+    if not sc:
+        return
+    e_red = sum(p["result"].get("engine_red_hit", 0) for p in sc)
+    b_red = sum(p["result"].get("baseline_red_hit", 0) for p in sc)
+    e_blue = sum(p["result"].get("engine_blue_hit", 0) for p in sc)
+    b_blue = sum(p["result"].get("baseline_blue_hit", 0) for p in sc)
+    eng_win = sum(1 for p in sc
+                  if (p["result"].get("engine_red_hit", 0) + p["result"].get("engine_blue_hit", 0))
+                  >= (p["result"].get("baseline_red_hit", 0) + p["result"].get("baseline_blue_hit", 0)))
+    n = len(sc)
+    print(f"[汇总] 已打分 {n} 期：引擎红球总命中 {e_red}（均值 {e_red/n:.2f}） / 随机基线 {b_red}（{b_red/n:.2f}）；"
+          f"蓝球 {e_blue} / {b_blue}；引擎不劣于基线 {eng_win}/{n} 期。")
+
+
+def auto(phase="both", signal="red_gap_max", window=WINDOW, decay=DECAY):
+    """开奖日自动流程（供周期性自动化调用）：
+      register: 今天若为开奖日(周二/四/日)且下一期尚未登记，则公式驱动预注册(开奖前，时间戳不可篡改)。
+      score:    对所有'已登记未打分且已开奖'的期 fetch+打分，并打印累计汇总。
+    两个 phase 相互独立且幂等；任一 phase 因时间漂移漏跑，下一开奖日的流程会自动补上(自修复)。"""
+    draws = load_draws()
+    known = {d["issue"] for d in draws}
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    wd = datetime.date.today().weekday()
+    is_draw_day = wd in (1, 3, 6)  # 周一=0 … 周日=6 → 周二/四/日
+
+    if phase in ("both", "register"):
+        if not is_draw_day:
+            print(f"[auto:register] {today} 非开奖日(周二/四/日)，跳过预注册。")
+        else:
+            last = max(int(d["issue"]) for d in draws)
+            nxt = f"{last + 1:05d}"
+            if nxt in known:
+                print(f"[auto:register] {nxt} 已在主表(已开奖)，无需预注册。")
+            elif any(p["issue"] == nxt for p in load_preds()):
+                print(f"[auto:register] {nxt} 已预注册，保留原时间戳，不覆盖。")
+            else:
+                register(nxt, today, window, decay, signal=signal)
+                print(f"[auto:register] 已为 {today}(开奖日) 预注册 {nxt}（公式驱动 {signal} + 随机基线）。")
+
+    if phase in ("both", "score"):
+        pending = [p for p in load_preds() if not p.get("scored") and p["issue"] in known]
+        if not pending:
+            print(f"[auto:score] 无待打分条目。")
+        else:
+            for p in pending:
+                score(p["issue"])
+        _summarize_scored()
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd")
@@ -296,6 +349,12 @@ def main():
                    help="回测公式驱动方法(如 red_gap_max)；不填=朴素递推边际")
     s = sub.add_parser("score")
     s.add_argument("--issue", required=True)
+    a = sub.add_parser("auto")
+    a.add_argument("--phase", default="both", choices=["both", "register", "score"])
+    a.add_argument("--signal", default="red_gap_max",
+                   help="公式驱动信号(默认 red_gap_max，来自引擎进化最佳存活信号)")
+    a.add_argument("--window", type=int, default=WINDOW)
+    a.add_argument("--decay", type=float, default=DECAY)
     args = ap.parse_args()
     if args.cmd == "register":
         register(args.issue, args.date, args.window, args.decay, signal=args.signal)
@@ -303,6 +362,8 @@ def main():
         backtest(args.range, args.window, args.decay, signal=args.signal)
     elif args.cmd == "score":
         score(args.issue)
+    elif args.cmd == "auto":
+        auto(args.phase, args.signal, args.window, args.decay)
     else:
         ap.print_help()
 
