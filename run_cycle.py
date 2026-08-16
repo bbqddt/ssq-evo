@@ -749,6 +749,17 @@ def main():
         _digest_entry["verdict"] = best.get("verdict", "?")
         _digest_entry["leaderboard"] = _lb_compact
         _digest_entry["positive_control"] = pc   # 真实阳性对照结果(run 内为 None 占位)
+        # run 字典未装因果耦合/非平稳/零假设交叉主键/cycle_id(这些在 state 字典独立成门计算),
+        # 从 state 补回, 否则看板对真实 cycle 的因果/非平稳两块会一直显示"—"。
+        _digest_entry["cycle_id"] = rid
+        for _k in ("causal_q_min", "causal_p_min", "causal_best_sig", "causal_best_test",
+                   "ccm_rho_max", "granger_f_max",
+                   "ns_n_sig_drift", "ns_n_sig_mom", "ns_best_drift_sig", "ns_best_drift_val",
+                   "ns_best_drift_q", "ns_best_mom_sig", "ns_best_mom_val", "ns_best_mom_q",
+                   "ns_verdict", "ns_k_sur",
+                   "oos_cross_primary", "oos_cross_primary_type"):
+            if _k in state:
+                _digest_entry[_k] = _clean_digest(state[_k])
         with open(_digest_path, "a", encoding="utf-8") as _df:
             _df.write(json.dumps(_digest_entry, ensure_ascii=False) + "\n")
         print(f"[cycle] 摘要(完整结论载荷)已写入 {_digest_path}")

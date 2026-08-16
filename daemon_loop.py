@@ -133,14 +133,34 @@ def run_cycle_subprocess(py):
                 lf.write(line)
                 lf.flush()
         proc.wait(timeout=1800)  # 单轮最长 30min 防死循环
-        return proc.returncode
+        rc = proc.returncode
     except subprocess.TimeoutExpired:
         proc.kill()
         _log("[daemon] cycle 超时(30min), 已强杀")
-        return -1
+        rc = -1
     except Exception as e:
         _log(f"[daemon] cycle 异常: {e}")
-        return -1
+        rc = -1
+    regen_dashboard(py)   # 每轮结束(无论成败)重建 CloudStudio 看板, 保证对外监控始终最新
+    return rc
+
+
+def regen_dashboard(py):
+    """每轮 cycle 后重建 CloudStudio 看板：读取最新 daily_digest.jsonl,
+    复制 jsonl 进 dashboard/ 并重新嵌入快照, 使对外监控层始终反映最新结论。
+    容错：失败不影响主流程（下一轮会重试）。"""
+    try:
+        _log("[daemon] 重建 CloudStudio 看板...")
+        subprocess.run(
+            [py, "-u", os.path.join(HERE, "make_dashboard.py")],
+            cwd=HERE, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
+            timeout=120,
+        )
+        _log("[daemon] 看板已重建")
+    except subprocess.TimeoutExpired:
+        _log("[daemon] 看板重建超时(120s), 跳过本轮")
+    except Exception as e:
+        _log(f"[daemon] 看板重建失败(不影响主流程): {e}")
 
 
 def get_last_issue():
