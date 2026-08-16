@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ssq_evo 研究监控看板</title>
+<style>
+  :root { --bg:#0f1320; --panel:#171c2b; --line:#2a2f3a; --fg:#e6e9ef; --mut:#7a8290; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+          font-family:-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; }
+  .wrap { max-width:1100px; margin:0 auto; padding:18px 16px 40px; }
+  h1 { font-size:20px; margin:0 0 2px; }
+  .sub { color:var(--mut); font-size:13px; margin-bottom:14px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:18px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .kpi-label { color:var(--mut); font-size:12px; }
+  .kpi-val { font-size:26px; font-weight:700; margin:4px 0 2px; }
+  .kpi-sub { font-size:12px; color:var(--mut); }
+  .badge { font-size:11px; padding:1px 6px; border-radius:6px; margin-left:6px; }
+  .badge.ok { background:#143d2a; color:#3ddc84; }
+  .badge.no { background:#3d1717; color:#ff6b6b; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:16px; }
+  .panel h2 { font-size:15px; margin:0 0 10px; }
+  .charts { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media(max-width:760px) { .charts { grid-template-columns:1fr; } }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--mut); font-weight:600; }
+  .ok { color:#3ddc84; } .no { color:#ff6b6b; }
+  .mono { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; color:var(--mut); }
+  .verdict { font-size:14px; line-height:1.5; padding:10px 12px; border-radius:8px;
+              background:#101626; border:1px solid var(--line); }
+  .note { font-size:12px; color:var(--mut); margin-top:8px; line-height:1.5; }
+  a { color:#4ea1ff; }
+  #freshness { font-size:12px; color:var(--mut); margin-top:6px; }
+</style></head>
+<body><div class="wrap">
+  <h1>双色球结构搜索引擎 · 研究监控看板</h1>
+  <div class="sub">假说：双色球开奖是否含可测时序结构（反向检验"时间不存在/块状宇宙"）。
+    更新：2026-08-16 13:39:33 · cycle 328 · 数据源 daily_digest.jsonl（3 轮历史）
+    <div id="freshness">⏳ 正在核对远端 daily_digest.jsonl …</div>
+  </div>
+
+  <div class="grid">
+    <div class="card"><div class="kpi-label">结构 FDR (best_q)</div><div class="kpi-val" style="color:#3ddc84">0.0363</div><div class="kpi-sub">阈值 0.05 / alert 0.01<span class="badge ok">✓ 显著</span></div></div>
+    <div class="card"><div class="kpi-label">coverage (评估算子数)</div><div class="kpi-val" style="color:#4ea1ff">6687</div><div class="kpi-sub">精英 ? · 唯一 ?</div></div>
+    <div class="card"><div class="kpi-label">样本外方向准确率</div><div class="kpi-val" style="color:#ffb454">0.688</div><div class="kpi-sub">随机基线 0.696 · p=0.6350 · n=590<span class="badge no">✗ 未达</span></div></div>
+    <div class="card"><div class="kpi-label">OOT 盲测命中率</div><div class="kpi-val" style="color:#ff8fab">0.700</div><div class="kpi-sub">冻结规则盲打未来 · p=0.0050 · n=243 (需结构FDR显著方作数)<span class="badge ok">✓ 显著</span></div></div>
+    <div class="card"><div class="kpi-label">谱扫描筛查 q</div><div class="kpi-val" style="color:#ffd166">1.0000</div><div class="kpi-sub">100组合枚举 · 秩FDR 0.0400 · 最强 red_recurrence_mean/fft_peak · z峰值 5.9 · (OOT未触发) · 构造伪结构[随机对照闸门]<span class="badge no">✗ 未达</span></div></div>
+    <div class="card"><div class="kpi-label">因果耦合 (CCM/Granger)</div><div class="kpi-val" style="color:#c77dff">0.8366</div><div class="kpi-sub">最强 blue-&amp;gt;red_mean/ccm · CCM ρ=0.099 · Granger F=0.806 · p=0.1765<span class="badge no">✗ 未达</span></div></div>
+    <div class="card"><div class="kpi-label">发现/确认分离闸门 (#41)</div><div class="kpi-val" style="color:#52d1ff">NULL</div><div class="kpi-sub">确认合并p=0.1030 · 发现p=0.9796 · 多数折确认 1/3<span class="badge no">✗ 未达</span></div></div>
+    <div class="card"><div class="kpi-label">非平稳监控 (磨损/动量)</div><div class="kpi-val" style="color:#9aa0ff">NULL</div><div class="kpi-sub">漂移显著 0 球 · 动量 0 球 · 最强漂移 blue4=0.0195 q=0.5698 · 最强动量 red3=-0.0314 q=0.6512<span class="badge ok">✓ 显著</span></div></div>
+    <div class="card"><div class="kpi-label">零假设交叉一致</div><div class="kpi-val" style="color:#ff6b6b">否</div><div class="kpi-sub">primary(shuffle)=0.2079<span class="badge no">✗ 未达</span></div></div>
+    <div class="card"><div class="kpi-label">ALERT</div><div class="kpi-val" style="color:#ff6b6b">未触发</div><div class="kpi-sub">门槛 q&amp;lt;0.01 &amp; OOS p&amp;lt;0.01<span class="badge no">✗ 未达</span></div></div>
+    <div class="card"><div class="kpi-label">前瞻样本</div><div class="kpi-val" style="color:#a78bfa">3490 期</div><div class="kpi-sub">最新 ? · 本轮新增 0</div></div>
+  </div>
+
+  <div class="panel"><h2>当前结论（诚实判定）</h2>
+    <div class="verdict">结构 FDR 曾低于 0.05，但样本外方向准确率未高于随机或零假设交叉不一致 → <b>选择性偏差/非结论</b>，不视为证据。</div>
+    <div class="note">说明：best_q 在 0.017–0.97 间剧烈漂移，表明搜索前沿尚未收敛；早期短暂出现的
+      "候选"已回落。任何声称"找到公式"的结论都必须先冻结公式、在 26094+ 新开奖上前瞻验证成立。
+      备注：无超越随机的可提取结构 (null)</div>
+  </div>
+
+  <div class="panel"><h2>🛡 随机对照闸门 · 构造伪结构拦截</h2><div class="verdict" style="border-color:#7a4b00">以下基信号在<b>纯随机双色球</b>上也复现显著 → 判为"构造伪结构"(信号构造本身产生确定性伪显著)，已在 FDR/最优/谱报警中降级：<b>red_recurrence_mean</b>。这是诚实护栏：null 域下必现的 Goodhart 假阳性被拦截。</div></div>
+  <div class="panel"><h2>🔬 持续阳性对照（闸门功率监控）</h2><div class="verdict" style="border-color:#143d2a">✓ 闸门灵敏(verdict=SIGNAL, conf_p=0.0082)</div><div class="note">阳性对照每 N 轮注入已知结构(AR(1)@lag8)，验证统一诚信闸门仍灵敏；若判不出 SIGNAL 说明闸门功率退化，红队审计会 ALERT。</div></div>
+
+  <div class="panel"><h2>趋势（来自 daily_digest.jsonl 历史）</h2>
+    <div class="charts">
+      <div><svg viewBox="0 0 640 200" width="100%" preserveAspectRatio="xMidYMid meet"><line x1="38" y1="14.0" x2="630" y2="14.0" stroke="#2a2f3a" stroke-width="1"/><text x="4" y="17.0" fill="#7a8290" font-size="9">1.00</text><line x1="38" y1="55.0" x2="630" y2="55.0" stroke="#2a2f3a" stroke-width="1"/><text x="4" y="58.0" fill="#7a8290" font-size="9">0.75</text><line x1="38" y1="96.0" x2="630" y2="96.0" stroke="#2a2f3a" stroke-width="1"/><text x="4" y="99.0" fill="#7a8290" font-size="9">0.50</text><line x1="38" y1="137.0" x2="630" y2="137.0" stroke="#2a2f3a" stroke-width="1"/><text x="4" y="140.0" fill="#7a8290" font-size="9">0.25</text><line x1="38" y1="178.0" x2="630" y2="178.0" stroke="#2a2f3a" stroke-width="1"/><text x="4" y="181.0" fill="#7a8290" font-size="9">0.00</text><line x1="38" y1="169.8" x2="630" y2="169.8" stroke="#ff6b6b" stroke-width="1" stroke-dasharray="4 3"/><text x="572" y="165.8" fill="#ff6b6b" font-size="9">阈值 0.05</text><polyline points="38.0,171.6 334.0,171.0 630.0,172.0" fill="none" stroke="#4ea1ff" stroke-width="2"/><circle cx="630.0" cy="172.0" r="3" fill="#4ea1ff"/><text x="38" y="194" fill="#7a8290" font-size="9">best_q 历史 (FDR 阈值 0.05)</text></svg></div>
+      <div><svg viewBox="0 0 640 200" width="100%" preserveAspectRatio="xMidYMid meet"><line x1="38" y1="14.0" x2="630" y2="14.0" stroke="#2a2f3a" stroke-width="1"/><text x="4" y="17.0" fill="#7a8290" font-size="9">6687.00</text><line x1="38" y1="55.0" x2="630" y2="55.0" stroke="#2a2f3a" stroke-width="1"/><text x="4" y="58.0" fill="#7a8290" font-size="9">5015.25</text><line x1="38" y1="96.0" x2="630" y2="96.0" stroke="#2a2f3a" stroke-width="1"/><text x="4" y="99.0" fill="#7a8290" font-size="9">3343.50</text><line x1="38" y1="137.0" x2="630" y2="137.0" stroke="#2a2f3a" stroke-width="1"/><text x="4" y="140.0" fill="#7a8290" font-size="9">1671.75</text><line x1="38" y1="178.0" x2="630" y2="178.0" stroke="#2a2f3a" stroke-width="1"/><text x="4" y="181.0" fill="#7a8290" font-size="9">0.00</text><polyline points="38.0,14.9 334.0,14.4 630.0,14.0" fill="none" stroke="#3ddc84" stroke-width="2"/><circle cx="630.0" cy="14.0" r="3" fill="#3ddc84"/><text x="38" y="194" fill="#7a8290" font-size="9">coverage 累计</text></svg></div>
+    </div>
+  </div>
+
+  <div class="panel"><h2>三车状态</h2>
+    <table class="cars">
+      <tr><th>车辆</th><th>角色</th><th>模式</th><th>状态</th></tr>
+      <tr><td><b>本地 Docker</b><br><span class=mono>ssq-evo-engine</span></td>
+          <td>唯一计算引擎(连续搜索) + 持续阳性对照</td>
+          <td>数据驱动(空闲/检查) + 每轮闸门复检</td>
+          <td class="ok">✓ 运行中<br><span class=mono>2026-08-16 13:39:33</span><br>
+              <span class="ok">✓ 闸门灵敏(verdict=SIGNAL, conf_p=0.0082)</span></td></tr>
+      <tr><td><b>GitHub Actions</b><br><span class=mono>ssq_evo.yml</span></td>
+          <td>代码门禁(仅 push/PR 跑测试，不跑引擎、不提交数据)</td>
+          <td>push/PR 触发</td>
+          <td class="ok">✓ 已接入(防坏代码合入 main)</td></tr>
+      <tr><td><b>腾讯云 CloudStudio</b><br><span class=mono>监控看板</span></td>
+          <td>对外可视化/分享层(静态)</td>
+          <td>读取 daily_digest.jsonl 直接渲染</td>
+          <td class="ok">✓ 已接入(本看板即部署产物)</td></tr>
+    </table>
+    </div>
+
+  <div class="panel"><h2>当前最优候选（leaderboard Top1）</h2>
+    <table>
+      <tr><th>信号</th><td>red_gap_max</td><th>检验</th><td>mi_max</td></tr>
+      <tr><th>p_raw</th><td>0.0099</td><th>FDR q</th><td>0.0363</td></tr>
+      <tr><th>样本外 p</th><td>0.9208</td><th>verdict</th><td>显著(&lt;0.05)</td></tr>
+    </table>
+  </div>
+
+  <div class="panel"><h2>Leaderboard (Top 8)</h2>
+    <table>
+      <tr><th>#</th><th>信号</th><th>检验</th><th>q</th><th>p_raw</th><th>检验参数</th><th>verdict</th></tr>
+      <tr><td>1</td><td>red_recurrence_mean</td><td>mi_max</td><td>1.0000</td><td>0.0099</td><td>maxlag=2, bins=9</td><td>构造伪结构[随机对照闸门]</td></tr><tr><td>2</td><td>red_recurrence_mean</td><td>mi_max</td><td>1.0000</td><td>0.0099</td><td>maxlag=2, bins=12</td><td>构造伪结构[随机对照闸门]</td></tr><tr><td>3</td><td>red_recurrence_mean</td><td>mi_max</td><td>1.0000</td><td>0.0099</td><td>maxlag=2, bins=14</td><td>构造伪结构[随机对照闸门]</td></tr><tr><td>4</td><td>red_recurrence_mean</td><td>mi_max</td><td>1.0000</td><td>0.0099</td><td>maxlag=2, bins=10</td><td>构造伪结构[随机对照闸门]</td></tr><tr><td>5</td><td>red_recurrence_mean</td><td>mi_max</td><td>1.0000</td><td>0.0099</td><td>maxlag=2, bins=15</td><td>构造伪结构[随机对照闸门]</td></tr><tr><td>6</td><td>red_recurrence_mean</td><td>mi_max</td><td>1.0000</td><td>0.0099</td><td>maxlag=2, bins=10</td><td>构造伪结构[随机对照闸门]</td></tr><tr><td>7</td><td>red_recurrence_mean</td><td>mi_max</td><td>1.0000</td><td>0.0099</td><td>maxlag=2, bins=12</td><td>构造伪结构[随机对照闸门]</td></tr><tr><td>8</td><td>red_recurrence_mean</td><td>mi_max</td><td>1.0000</td><td>0.0099</td><td>maxlag=2, bins=16</td><td>构造伪结构[随机对照闸门]</td></tr>
+    </table>
+  </div>
+
+  <div class="panel"><h2>前瞻验证进度</h2>
+    <div class="note">首个 q&lt;0.05 出现时刻：2026-08-16 13:39:33；自该时刻新开奖累计：0 期；
+      最新已抓期号：?。若 added 长期为 0，说明官方尚未开新奖或抓取失败——前瞻验证须等真实新数据。</div>
+  </div>
+
+  <div class="panel"><h2>历史轮次（最近 12 轮）</h2>
+    <table>
+      <tr><th>cycle</th><th>时间</th><th>best_q</th><th>最优</th><th>verdict</th><th>wf</th><th>谱</th><th>伪结构</th></tr>
+      <tr><td>328</td><td>2026-08-16 13:39:33</td><td>0.0363</td><td>red_gap_max/mi_max</td><td>显著(&lt;0.05)</td><td>NULL</td><td>构造伪结构[随机对照闸门]</td><td>⚠</td></tr><tr><td>327</td><td>2026-08-16 13:24:28</td><td>0.0428</td><td>red_mean/mi_max</td><td>显著(&lt;0.05)</td><td>NULL</td><td>构造伪结构[随机对照闸门]</td><td>⚠</td></tr><tr><td>326</td><td>2026-08-16 12:35:02</td><td>0.0392</td><td>red_mean/mi_max</td><td>选择性偏差/非结论</td><td>NULL</td><td>构造伪结构[随机对照闸门]</td><td>⚠</td></tr>
+    </table>
+  </div>
+
+  <div class="note">本看板由 make_dashboard 直接读取 <b>daily_digest.jsonl</b>（run_cycle 每轮追加的"完整结论载荷"日志）生成，
+    并经 CloudStudio 部署到腾讯云。页面加载后会 fetch 同源 daily_digest.jsonl 直接解读——若远端已有更新的 cycle，
+    将自动刷新以展示最新结论。全部统计闸门 (BH-FDR 多重比较校正、AAFT/IAAFT/shuffle/twin/四零假设交叉、样本外验证、
+    Out-of-Time 盲测、<b>直接谱扫描兜底</b>、<b>发现/确认分离 (#41)</b>、<b>随机对照闸门拦截构造伪结构</b>) 均为预注册，
+    不人为调高显著性。SIGNAL(结构在独立未来复现)/UNCONFIRMED(只活在发现集，闸门已拦截)/NULL(无结构) 三态互斥。</div>
+</div>
+
+<script>
+// ── 运行时直接解读 daily_digest.jsonl ──────────────────────
+(function(){
+  var EMBEDDED = {"latest_cycle": 328, "latest_ts": "2026-08-16 13:39:33"};
+  function setFresh(msg, isLive){
+    var el = document.getElementById('freshness');
+    if(!el) return;
+    el.textContent = (isLive ? '🔄 ' : '⏳ ') + msg;
+  }
+  function tryReload(remoteLatest){
+    if(remoteLatest && EMBEDDED.latest_cycle!=null &&
+       Number(remoteLatest.cycle_id) > Number(EMBEDDED.latest_cycle)){
+      setFresh('检测到更新 cycle '+remoteLatest.cycle_id+'，正在刷新…', true);
+      setTimeout(function(){ location.reload(); }, 400);
+      return true;
+    }
+    return false;
+  }
+  function parseJSONL(text){
+    var recs=[]; var lines=text.split(/\r?\n/);
+    for(var i=0;i<lines.length;i++){ var l=lines[i].trim(); if(!l) continue;
+      try{ recs.push(JSON.parse(l)); }catch(e){} }
+    return recs;
+  }
+  function check(){
+    fetch('./daily_digest.jsonl', {cache:'no-store'}).then(function(r){ return r.text(); })
+      .then(function(t){
+        var recs=parseJSONL(t);
+        if(!recs.length){ setFresh('远端无数据', false); return; }
+        if(tryReload(recs[recs.length-1])) return;
+        setFresh('已核对·数据新鲜（远端最新 cycle '+recs[recs.length-1].cycle_id+' @ '+recs[recs.length-1].ts+'）', false);
+      })
+      .catch(function(e){
+        setFresh('无法读取远端 daily_digest.jsonl（将显示已部署版本）', false);
+      });
+  }
+  check();
+  setInterval(check, 2*60*60*1000);  // 每 2 小时核对一次
+})();
+</script>
+</body></html>
