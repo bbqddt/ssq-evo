@@ -21,6 +21,9 @@ daemon.log
 audit/
 # 扩轴+分层空模型证据账本（运行时追加写，不进仓库）
 evidence_ledger.json
+# 防火墙审计账本 + 生产候选（运行时追加；含来源留痕与晋级签字，不进仓库）
+audit_ledger.json
+production_candidates.json
 
 # 项目记忆/工具元数据（不进仓库）
 .workbuddy/

@@ -26,6 +26,7 @@ import nonstationarity as NS
 import evaluator as EV
 import cache as C
 import positive_control as PC
+import firewall as FW
 
 MASTER = os.path.join(DATA_DIR, "ssq_master.csv")
 DB = os.path.join(DATA_DIR, "ssq_evo.db")
@@ -46,6 +47,9 @@ DEFAULT_CFG = {
     "positive_control_every": 1,            # 1=每轮；>1 每 K 轮一次（省算力）
     "positive_control_n": 1000, "positive_control_lag": 8,
     "positive_control_k_sur": 30, "positive_control_folds": 2,
+    # 防火墙加固：GA 搜索只喂【发现段】，确认/实盘段物理隔离（杜绝搜索阶段看未来数据）。
+    # 默认开启（真实加固）；设为 False 可回退到全量数据旧行为。
+    "firewall_discovery_only": True, "ga_discovery_frac": 0.7, "ga_audit_topk": 8,
 }
 FDR_Q = 0.05          # 结构显著的 FDR 门槛（与看板一致）
 
@@ -357,11 +361,32 @@ def main():
     elite_seeds = fr.get("elites", [])
     print(f"[cycle] frontier: 历史覆盖度={fr.get('coverage',0)}, 精英种子={len(elite_seeds)}, "
           f"z历史长度={len(fr.get('best_z_history',[]))}")
-    evo = E.Evolution(reds, blues, rng, k_light=cfg["k_light"], k_heavy=cfg["k_heavy"],
+    # —— 防火墙加固：GA 搜索只喂【发现段】，确认/实盘段物理隔离 ——
+    ga_reds, ga_blues = reds, blues
+    fw_seed = int(cfg.get("seed", 20260813)) + N
+    if cfg.get("firewall_discovery_only", True):
+        ga_reds, ga_blues, _, _ = FW.discovery_split(reds, blues,
+                                                     cfg.get("ga_discovery_frac", 0.7))
+        print(f"[firewall] GA 已隔离到发现段(前{cfg.get('ga_discovery_frac',0.7):.0%}, "
+              f"{ga_reds.shape[0]}期)；确认/实盘段未进入搜索。")
+    evo = E.Evolution(ga_reds, ga_blues, rng, k_light=cfg["k_light"], k_heavy=cfg["k_heavy"],
                       epochs=cfg["epochs"], pop=cfg["pop"],
                       elites=elite_seeds, frontier=fr, eval_cache=ec)
     leaderboard, all_evals = evo.run()
     print(f"[cycle] 评估算子数(含重复): {len(all_evals)}, 唯一基因组: {len(leaderboard)}")
+    # —— 审计账本：记录 GA Top-K 候选的来源留痕（看的数据段指纹/种子/代码版本）——
+    if cfg.get("firewall_discovery_only", True):
+        try:
+            disc_fp = FW.discovery_fingerprint(ga_reds, ga_blues)
+            topk = sorted(leaderboard.values(), key=lambda e: e.get("p_raw", 1.0))[:int(cfg.get("ga_audit_topk", 8))]
+            for e in topk:
+                FW.record_candidate({"sig": e.get("sig"), "test": e.get("test"),
+                                     "params": e.get("params")}, source="GA", disc_fp=disc_fp,
+                                    seed=fw_seed, random_replay_label=None,
+                                    random_replay_passed=None)
+            print(f"[firewall] 审计账本已记录 GA Top-{len(topk)} 候选来源留痕。")
+        except Exception as e:
+            print(f"[firewall] 审计账本记录失败(不影响主流程): {e}")
 
     # 2b. 直接谱扫描兜底闸门（独立于演化搜索）
     #     枚举全部基信号 × {fft_peak,acf_max,dfa_alpha,mi_max}，用 evaluate() 跑 shuffle

@@ -133,6 +133,12 @@ def run(reds, blues, seed=20260815, k_sur=40):
             lr["group"] = "formula(comp)"
             lr["note"] = "可微 Formula 进化候选（公式轴）"
             lr["disc_p"] = best["disc_p"]
+            # —— 随机数据对照闸门（公式轴同样须过；否则构造伪结构从公式轴漏过）——
+            ctrl = random_control_label(best["sig"], [best["test"]], N, seed=seed, k_sur=60)
+            if ctrl == "SURVIVOR":
+                lr["artifact_prone"] = True
+                lr["label"] = "ARTIFACT_BY_CONSTRUCTION"
+                lr["note"] += " [随机对照闸门: 纯随机也SURVIVOR => 构造伪结构, 已降级]"
             recs.append(lr)
     except Exception as e:  # 公式轴失败不应拖垮整轮
         recs.append({"group": "formula(comp)", "sig": None, "label": "ERROR",
