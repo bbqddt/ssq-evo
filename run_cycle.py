@@ -541,6 +541,7 @@ def main():
 
     # 7. 持久化
     con = S.open_db(DB)
+    pc = None  # 持续阳性对照结果占位；8.5 节在 state 写入之后重算（依赖 rid），此处先绑定避免 UnboundLocalError
     run = {
         "ts": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "n_issues": N, "added": added, "n_eval": len(all_evals),
@@ -653,6 +654,7 @@ def main():
         "ns_best_mom_q": round(ns["best_q_mom"], 4),
         "ns_verdict": ns["verdict"], "ns_k_sur": ns["k_sur"],
         "alert": bool(alert),
+        "positive_control": pc,   # 持续阳性对照结果（None=本轮未跑；dict=闸门功率核验）
         "artifact_prone_n": len(prone), "artifact_prone": sorted(prone),
         "n_eval": len(all_evals), "n_unique": len(leaderboard),
         "coverage": fr["coverage"], "elite_count": len(fr["elites"]),
