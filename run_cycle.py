@@ -718,26 +718,40 @@ def main():
     except Exception as de:
         print(f"[cycle] dashboard 生成失败(不影响主流程): {de}")
 
-    # 8c2. 周期摘要持久化 (追加式; 供外部读取引擎结论, 不依赖解析 daemon.log 黑洞)
+    # 8c2. 周期摘要持久化 (追加式 JSONL; 供 CloudStudio 看板/外部直接解读结论,
+    #      不依赖解析 daemon.log 黑洞, 也不依赖易过期的 state.json)
     _digest_path = os.path.join(DATA_DIR, "daily_digest.jsonl")
     try:
-        _digest_entry = {
-            "ts": run["ts"], "cycle_id": rid, "n_issues": N,
-            "last_issue": issues[-1], "added": added,
-            "best_sig": best["sig"], "best_test": best["test"],
-            "best_q": round(best_q, 6), "best_p": round(best["p_raw"], 6),
-            "verdict": best.get("verdict", "?"),
-            "coverage": fr["coverage"],
-            "alert": bool(alert),
-            "artifact_prone": sorted(prone)[:12],
-            "wf_verdict": (wf["verdict"] if wf else None),
-            "spectral_verdict": spec.get("verdict"),
-            "note": ("候选结构! 需人工复核" if alert else
-                    ("ARTIFACT" if best["sig"] in prone else "NULL(无经确认结构)")),
-        }
+        # 完整结论载荷：直接复用 run 字典(已含 oos/谱/因果/非平稳/确认分离闸门等),
+        # 仅补三处: ① 头条 verdict 文本 ② leaderboard 紧凑表 ③ positive_control 真实值
+        # (pc 在 run 字典生成之后才重算, run 内为 None 占位, 此处用真实 pc 覆盖)。
+        def _clean_digest(o):
+            if isinstance(o, dict):
+                return {k: _clean_digest(v) for k, v in o.items()}
+            if isinstance(o, (list, tuple)):
+                return [_clean_digest(v) for v in o]
+            if isinstance(o, np.floating):
+                return float(o)
+            if isinstance(o, np.integer):
+                return int(o)
+            return o
+        _lb_compact = [
+            {"sig": e["sig"], "test": e["test"],
+             "params": e.get("params", {"_sig": {}, "_test": {}}),
+             "p_raw": round(float(e["p_raw"]), 6),
+             "q": round(float(e.get("q", 1.0)), 6),
+             "z": (round(float(e["z"]), 3) if e.get("z") is not None else None),
+             "stat": (round(float(e["stat"]), 4) if e.get("stat") is not None else None),
+             "verdict": e.get("verdict", "—")}
+            for e in lb_top[:8]
+        ]
+        _digest_entry = _clean_digest(dict(run))
+        _digest_entry["verdict"] = best.get("verdict", "?")
+        _digest_entry["leaderboard"] = _lb_compact
+        _digest_entry["positive_control"] = pc   # 真实阳性对照结果(run 内为 None 占位)
         with open(_digest_path, "a", encoding="utf-8") as _df:
             _df.write(json.dumps(_digest_entry, ensure_ascii=False) + "\n")
-        print(f"[cycle] 摘要已写入 {_digest_path}")
+        print(f"[cycle] 摘要(完整结论载荷)已写入 {_digest_path}")
     except Exception as _de:
         print(f"[cycle] 摘要写入失败(不影响主流程): {_de}")
     sys.stdout.flush()

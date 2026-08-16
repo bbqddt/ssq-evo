@@ -1,20 +1,28 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""生成 ssq_evo 研究监控看板 (dashboard.html)。
+"""生成 ssq_evo 研究监控看板 (dashboard/index.html)。
 
-- 完全自包含：内嵌 SVG 趋势图 + 内联 CSS，不依赖任何 CDN/JS 框架。
-- 数据源：D:/ssq_evo_data/state.json + 滚动快照 state.*.json。
-- 每轮 run_cycle 末尾调用，输出到 D:/ssq_evo_data/dashboard/index.html。
-- 该目录由 CloudStudio 部署到腾讯云，作为"第三辆车"的对外监控层。
+数据源改为 **daily_digest.jsonl**（而非易过期的 state.json）：
+  - daily_digest.jsonl 是 run_cycle 每轮追加写的"完整结论载荷"日志，
+    是引擎结论最权威、最新鲜、且不可篡改追加的记录。
+  - 本脚本读取全部 JSONL 行：最后一行 = 最新结论，全部行 = 历史趋势。
+  - 生成的 index.html 自包含（内联 CSS + 内嵌数据 + 一段轻量 JS）：
+      * 内嵌最新+历史数据（部署即正确，不依赖运行时 fetch）；
+      * 页面加载后 fetch('./daily_digest.jsonl') 直接解读该文件：
+        若远端最新 cycle 比内嵌新 → 自动刷新页面显示最新结论；
+        否则显示"已核对·数据新鲜"时间戳。
+  - 同时把 daily_digest.jsonl 复制到 dashboard/ 目录，使 fetch 同源可用。
+该目录由 CloudStudio 部署到腾讯云，作为"第三辆车"的对外监控层。
 """
 import json
 import os
 import html
 import datetime
+import shutil
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.environ.get("DATA_DIR", r"D:\ssq_evo_data")
-STATE = os.path.join(DATA, "state.json")
+DIGEST = os.path.join(DATA, "daily_digest.jsonl")
 OUT_DIR = os.path.join(DATA, "dashboard")
 OUT = os.path.join(OUT_DIR, "index.html")
 
@@ -23,6 +31,29 @@ FDR_Q = 0.05            # 结构显著的 FDR 门槛
 OOS_P = 0.01            # 样本外显著门槛
 
 
+# ────────────────────────────────────────────────────────────
+# 数据加载
+# ────────────────────────────────────────────────────────────
+def load_digest(path):
+    """读取 daily_digest.jsonl，返回记录列表（容错跳过坏行）。"""
+    if not os.path.exists(path):
+        return []
+    recs = []
+    with open(path, encoding="utf-8") as f:
+        for ln, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                recs.append(json.loads(line))
+            except Exception as e:
+                print(f"[dashboard] 跳过第 {ln} 行(解析失败): {e}")
+    return recs
+
+
+# ────────────────────────────────────────────────────────────
+# 显示辅助
+# ────────────────────────────────────────────────────────────
 def _num(v, nd=4):
     try:
         return f"{float(v):.{nd}f}"
@@ -32,6 +63,10 @@ def _num(v, nd=4):
 
 def _esc(s):
     return html.escape(str(s))
+
+
+def _yn(b):
+    return "是" if b else "否"
 
 
 def svg_line(series, w=640, h=200, ymin=0.0, ymax=1.0, threshold=None,
@@ -60,7 +95,6 @@ def svg_line(series, w=640, h=200, ymin=0.0, ymax=1.0, threshold=None,
         th = (f'<line x1="{pad_l}" y1="{ty:.1f}" x2="{w-pad_r}" y2="{ty:.1f}" '
               f'stroke="{tcolor}" stroke-width="1" stroke-dasharray="4 3"/>'
               f'<text x="{w-pad_r-58}" y="{ty-4:.1f}" fill="{tcolor}" font-size="9">阈值 {threshold}</text>')
-    # 末点标记
     lx, ly = xs[-1], yv(series[-1][1])
     return (f'<svg viewBox="0 0 {w} {h}" width="100%" preserveAspectRatio="xMidYMid meet">'
             f'{grid}{th}'
@@ -82,14 +116,19 @@ def kpi_card(label, value, sub, color="#4ea1ff", ok=None):
 
 
 def verdict_text(s):
-    q = s.get("best_q", 1.0)
+    """基于最新 digest 记录计算诚实头条结论。"""
+    q = float(s.get("best_q", 1.0) or 1.0)
     above = bool(s.get("oos_acc_above"))
     consistent = bool(s.get("oos_cross_consistent"))
     alert = bool(s.get("alert"))
+    wf = s.get("wf_verdict")
     if alert:
         return ("<b style='color:#3ddc84'>ALERT 已触发</b>：候选跨过全部预设闸门 "
                 f"(FDR q&lt;{ALERT_Q}, OOS p&lt;{OOS_P}, 零假设交叉一致)，"
                 "已进入前瞻验证等待新开奖确认。")
+    if wf == "SIGNAL":
+        return ("发现/确认分离闸门 (#41) 判定 <b>SIGNAL</b>：候选在冻结后的独立确认段上"
+                "跨折复现，是'结构在独立未来复现'的唯一诚实证据。")
     if q < FDR_Q and above and consistent:
         return ("出现跨 FDR/样本外/零假设交叉三重闸门的候选，但 alert 门槛更严 "
                 f"(q&lt;{ALERT_Q})，暂判定为<b>强候选(非结论)</b>——需新开奖前瞻验证。")
@@ -100,102 +139,110 @@ def verdict_text(s):
             "未被推翻（这是诚实且符合已知物理的结论）。")
 
 
-def build(s):
-    hist = s.get("history", [])
-    q_series = [(i, h.get("best_q", 1.0)) for i, h in enumerate(hist)]
-    cov_series = [(i, h.get("coverage")) for i, h in enumerate(hist)
-                  if h.get("coverage") is not None]
-    lb = s.get("leaderboard", [])
-    top = lb[0] if lb else {}
+# ────────────────────────────────────────────────────────────
+# 主构建
+# ────────────────────────────────────────────────────────────
+def build(records):
+    if not records:
+        return ("<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>"
+                "<title>ssq_evo 看板</title></head><body>"
+                "<h1>尚无结论数据</h1><p>等待 run_cycle 完成首轮并写入 daily_digest.jsonl。</p>"
+                "</body></html>")
+    latest = records[-1]
+    hist = records
+
+    # 历史趋势序列
+    q_series = [(i, float(r.get("best_q", 1.0) or 1.0)) for i, r in enumerate(hist)]
+    cov_series = [(i, r.get("coverage")) for i, r in enumerate(hist)
+                  if r.get("coverage") is not None]
+    n_series = [(i, r.get("n_issues")) for i, r in enumerate(hist)
+                if r.get("n_issues") is not None]
+
+    q = float(latest.get("best_q", 1.0) or 1.0)
+    oos_acc = latest.get("oos_acc")
+    oos_sur = latest.get("oos_acc_sur")
+    oos_p = latest.get("oos_acc_p")
+    oos_above = bool(latest.get("oos_acc_above"))
+    oos_n = latest.get("oos_acc_n")
+    consistent = bool(latest.get("oos_cross_consistent"))
+    alert = bool(latest.get("alert"))
+    cross_primary = latest.get("oos_cross_primary")
+    cross_type = latest.get("oos_cross_primary_type") or "—"
+
+    oot_hit = latest.get("oot_hit")
+    oot_p = latest.get("oot_p")
+    oot_n = latest.get("oot_n")
+    oot_above = bool(latest.get("oot_above"))
+    oot_ok = (oot_above and q < FDR_Q)
+
+    spectral_q = latest.get("spectral_q")
+    spectral_n = latest.get("spectral_n")
+    spectral_rank = latest.get("spectral_q_rank")
+    spectral_sig = latest.get("spectral_best_sig")
+    spectral_test = latest.get("spectral_best_test")
+    spectral_z = latest.get("spectral_best_z")
+    spectral_oot_p = latest.get("spectral_oot_p")
+    spectral_oot_above = bool(latest.get("spectral_oot_above"))
+    spectral_alert = bool(latest.get("spectral_alert"))
+    spec_ok = spectral_alert
+
+    causal_best = latest.get("causal_q_min")
+    causal_sig = latest.get("causal_best_sig")
+    causal_test = latest.get("causal_best_test")
+    causal_p = latest.get("causal_p_min")
+    ccm_rho = latest.get("ccm_rho_max")
+    granger_f = latest.get("granger_f_max")
+    causal_ok = (causal_best is not None and causal_best < 0.05)
+
+    wf = latest.get("wf_verdict")
+    wf_conf_p = latest.get("wf_conf_p")
+    wf_disc_p = latest.get("wf_disc_p")
+    wf_nc = latest.get("wf_n_confirm")
+    wf_nf = latest.get("wf_n_folds")
+    wf_color = "#52d1ff" if wf in ("NULL", "UNCONFIRMED") else ("#3ddc84" if wf == "SIGNAL" else "#ff6b6b")
+
+    ns_n_drift = latest.get("ns_n_sig_drift")
+    ns_n_mom = latest.get("ns_n_sig_mom")
+    ns_d_sig = latest.get("ns_best_drift_sig")
+    ns_d_val = latest.get("ns_best_drift_val")
+    ns_d_q = latest.get("ns_best_drift_q")
+    ns_m_sig = latest.get("ns_best_mom_sig")
+    ns_m_val = latest.get("ns_best_mom_val")
+    ns_m_q = latest.get("ns_best_mom_q")
+    ns_ok = bool((ns_n_drift or 0) == 0 and (ns_n_mom or 0) == 0)
+
+    pc = latest.get("positive_control")
+    pc_txt = "—"
+    if isinstance(pc, dict):
+        pc_txt = ("✓ 闸门灵敏(verdict=%s, conf_p=%s)" % (pc.get("verdict"), pc.get("conf_p"))
+                  if pc.get("verified") else
+                  "✗ 阳性对照失败(闸门功率退化!)")
+
+    prone = latest.get("artifact_prone") or []
+    n_issues = latest.get("n_issues", 0)
+    last_issue = latest.get("last_issue", "?")
+    added = latest.get("added", 0)
+    coverage = latest.get("coverage", "?")
+    elite = latest.get("elite_count", "?")
+    n_unique = latest.get("n_unique", "?")
+    best_sig = latest.get("best_sig", "?")
+    best_test = latest.get("best_test", "?")
+    best_p = latest.get("best_p")
+    note = latest.get("note", "")
+    spectral_verdict = latest.get("spectral_verdict")
+    oos_p_val = latest.get("oos_p")
 
     # 前瞻验证进度：从首个 q<0.05 的时刻起，新开奖累计数
     first_sig_ts = None
-    for h in reversed(hist):
-        if h.get("best_q", 1) < FDR_Q:
-            first_sig_ts = h.get("ts")
-    n_issues = s.get("n_issues", 0)
-    last_issue = s.get("last_issue", "?")
-    added = s.get("added", 0)
+    for r in reversed(hist):
+        if float(r.get("best_q", 1.0) or 1.0) < FDR_Q:
+            first_sig_ts = r.get("ts")
+            break
 
-    q = s.get("best_q", 1.0)
-    oos_p = s.get("oos_acc_p", 1.0)
-    oos_acc = s.get("oos_acc", 0)
-    oos_sur = s.get("oos_acc_sur", 0)
-    consistent = bool(s.get("oos_cross_consistent"))
-    alert = bool(s.get("alert"))
-    cp = s.get("oos_cross_primary")
-    cpt = s.get("oos_cross_primary_type", "?")
+    q_color = "#3ddc84" if q < FDR_Q else ("#ffb454" if q < 0.2 else "#ff6b6b")
 
-    oos_ok = (bool(s.get("oos_acc_above")) and q < FDR_Q)
-    cross_ok = consistent
-
-    # Out-of-Time (OOT) 盲测：候选来自训练段，冻结规则盲打真正未来
-    oot_hit = s.get("oot_hit", 0)
-    oot_p = s.get("oot_p", 1.0)
-    oot_n = s.get("oot_n", 0)
-    oot_above = bool(s.get("oot_above"))
-    oot_ok = (oot_above and q < FDR_Q)
-
-    # 直接谱扫描兜底闸门（独立于演化）
-    spectral_q = s.get("spectral_q", 1.0)
-    spectral_q_rank = s.get("spectral_q_rank", 1.0)
-    spectral_p = s.get("spectral_p", 1.0)
-    spectral_sig = s.get("spectral_best_sig")
-    spectral_test = s.get("spectral_best_test")
-    spectral_verdict = s.get("spectral_verdict", "—")
-    spectral_n = s.get("spectral_n", 0)
-    spectral_z = s.get("spectral_z_min", 0.0)
-    spectral_oot_hit = s.get("spectral_oot_hit")
-    spectral_oot_p = s.get("spectral_oot_p")
-    spectral_oot_above = bool(s.get("spectral_oot_above"))
-    spec_ok = bool(s.get("spectral_alert"))   # 仅 OOT 确认的谱结构才算"通过"
-
-    # 因果耦合字段（从 spectral_scan 的 evals 中提取 ccm/granger 最佳）
-    causal_best = s.get("causal_q_min")
-    causal_sig = s.get("causal_best_sig")
-    causal_test = s.get("causal_best_test")
-    causal_p = s.get("causal_p_min")
-    ccm_rho = s.get("ccm_rho_max")
-    granger_f = s.get("granger_f_max")
-    causal_ok = (causal_best is not None and causal_best < 0.05)
-
-    # 非平稳 / 物理磨损监控闸门字段
-    ns_n_drift = s.get("ns_n_sig_drift")
-    ns_n_mom = s.get("ns_n_sig_mom")
-    ns_best_drift_sig = s.get("ns_best_drift_sig")
-    ns_best_drift_val = s.get("ns_best_drift_val")
-    ns_best_drift_q = s.get("ns_best_drift_q")
-    ns_best_mom_sig = s.get("ns_best_mom_sig")
-    ns_best_mom_val = s.get("ns_best_mom_val")
-    ns_best_mom_q = s.get("ns_best_mom_q")
-    ns_verdict = s.get("ns_verdict")
-    ns_ok = bool(ns_n_drift == 0 and ns_n_mom == 0)   # 无显著非平稳 = 闸门干净
-
-    pc = s.get("positive_control")
-    pc_txt = "—"
-    if isinstance(pc, dict):
-        pc_txt = ("✓ 闸门灵敏(verdict=%s)" % pc.get("verdict")
-                  if pc.get("verified") else
-                  "✗ 阳性对照失败(闸门功率退化!)")
-    three_cars = f"""
-    <table class="cars">
-      <tr><th>车辆</th><th>角色</th><th>模式</th><th>状态</th></tr>
-      <tr><td><b>本地 Docker</b><br><span class=mono>ssq-evo-engine</span></td>
-          <td>唯一计算引擎(连续搜索) + 持续阳性对照</td>
-          <td>连续 60s 冷却 + 每轮闸门复检</td>
-          <td class="ok">✓ 运行中<br><span class=mono>{_esc(s.get('updated',''))}</span><br>
-              <span class="{'ok' if (isinstance(pc,dict) and pc.get('verified')) else 'no'}">{_esc(pc_txt)}</span></td></tr>
-      <tr><td><b>GitHub Actions</b><br><span class=mono>ssq_evo.yml</span></td>
-          <td>代码门禁(仅 push/PR 跑测试，不跑引擎、不提交数据)</td>
-          <td>push/PR 触发</td>
-          <td class="ok">✓ 已接入(防坏代码合入 main)</td></tr>
-      <tr><td><b>腾讯云 CloudStudio</b><br><span class=mono>监控看板</span></td>
-          <td>对外可视化/分享层(静态)</td>
-          <td>每轮自动刷新 + 部署</td>
-          <td class="ok">✓ 已接入(本看板即部署产物)</td></tr>
-    </table>
-    """
-
+    # Leaderboard
+    lb = latest.get("leaderboard") or []
     lb_rows = ""
     for i, e in enumerate(lb[:8]):
         params = e.get("params", {})
@@ -207,7 +254,58 @@ def build(s):
                     f"<td>{_esc(tp_s)}</td>"
                     f"<td>{_esc(e.get('verdict',''))}</td></tr>")
 
-    q_color = "#3ddc84" if q < FDR_Q else ("#ffb454" if q < 0.2 else "#ff6b6b")
+    three_cars = f"""
+    <table class="cars">
+      <tr><th>车辆</th><th>角色</th><th>模式</th><th>状态</th></tr>
+      <tr><td><b>本地 Docker</b><br><span class=mono>ssq-evo-engine</span></td>
+          <td>唯一计算引擎(连续搜索) + 持续阳性对照</td>
+          <td>数据驱动(空闲/检查) + 每轮闸门复检</td>
+          <td class="ok">✓ 运行中<br><span class=mono>{_esc(latest.get('ts',''))}</span><br>
+              <span class="{'ok' if (isinstance(pc,dict) and pc.get('verified')) else 'no'}">{_esc(pc_txt)}</span></td></tr>
+      <tr><td><b>GitHub Actions</b><br><span class=mono>ssq_evo.yml</span></td>
+          <td>代码门禁(仅 push/PR 跑测试，不跑引擎、不提交数据)</td>
+          <td>push/PR 触发</td>
+          <td class="ok">✓ 已接入(防坏代码合入 main)</td></tr>
+      <tr><td><b>腾讯云 CloudStudio</b><br><span class=mono>监控看板</span></td>
+          <td>对外可视化/分享层(静态)</td>
+          <td>读取 daily_digest.jsonl 直接渲染</td>
+          <td class="ok">✓ 已接入(本看板即部署产物)</td></tr>
+    </table>
+    """
+
+    # 历史表（最近 12 轮）
+    hist_rows = ""
+    for r in reversed(hist[-12:]):
+        hist_rows += (f"<tr><td>{_esc(r.get('cycle_id','?'))}</td>"
+                      f"<td>{_esc(r.get('ts',''))}</td>"
+                      f"<td>{_num(r.get('best_q',1),4)}</td>"
+                      f"<td>{_esc(r.get('best_sig','?'))}/{_esc(r.get('best_test','?'))}</td>"
+                      f"<td>{_esc(r.get('verdict','—'))}</td>"
+                      f"<td>{_esc(r.get('wf_verdict') or '—')}</td>"
+                      f"<td>{_esc(r.get('spectral_verdict') or '—')}</td>"
+                      f"<td>{'⚠' if r.get('artifact_prone') else ''}</td></tr>")
+
+    # 构造伪结构拦截框
+    if prone:
+        prone_box = (f'<div class="panel"><h2>🛡 随机对照闸门 · 构造伪结构拦截</h2>'
+                     f'<div class="verdict" style="border-color:#7a4b00">以下基信号在<b>纯随机双色球</b>上也复现显著 → '
+                     f'判为"构造伪结构"(信号构造本身产生确定性伪显著)，已在 FDR/最优/谱报警中降级：'
+                     f'<b>{_esc(", ".join(map(str, prone)))}</b>。这是诚实护栏：null 域下必现的 Goodhart 假阳性被拦截。</div></div>')
+    else:
+        prone_box = (f'<div class="panel"><h2>🛡 随机对照闸门 · 构造伪结构拦截</h2>'
+                     f'<div class="verdict" style="border-color:#143d2a">本轮无构造伪结构信号。'
+                     f'所有候选在纯随机数据上均未复现，无确定性伪显著。</div></div>')
+
+    # 阳性对照框
+    pc_box = (f'<div class="panel"><h2>🔬 持续阳性对照（闸门功率监控）</h2>'
+              f'<div class="verdict" style="border-color:{"#143d2a" if (isinstance(pc,dict) and pc.get("verified")) else "#3d1717"}">'
+              f'{_esc(pc_txt) if pc else "本轮未跑阳性对照（见 config 的 positive_control_every）。"}'
+              f'</div><div class="note">阳性对照每 N 轮注入已知结构(AR(1)@lag8)，验证统一诚信闸门仍灵敏；'
+              f'若判不出 SIGNAL 说明闸门功率退化，红队审计会 ALERT。</div></div>')
+
+    # 嵌入数据供 JS 运行时 fetch 刷新
+    embed = json.dumps({"latest_cycle": latest.get("cycle_id"),
+                        "latest_ts": latest.get("ts")}, ensure_ascii=False)
 
     html_doc = f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
@@ -242,33 +340,40 @@ def build(s):
               background:#101626; border:1px solid var(--line); }}
   .note {{ font-size:12px; color:var(--mut); margin-top:8px; line-height:1.5; }}
   a {{ color:#4ea1ff; }}
+  #freshness {{ font-size:12px; color:var(--mut); margin-top:6px; }}
 </style></head>
 <body><div class="wrap">
   <h1>双色球结构搜索引擎 · 研究监控看板</h1>
   <div class="sub">假说：双色球开奖是否含可测时序结构（反向检验"时间不存在/块状宇宙"）。
-    更新：{_esc(s.get('updated',''))} · cycle {s.get('cycle_id','?')}</div>
+    更新：{_esc(latest.get('ts',''))} · cycle {latest.get('cycle_id','?')} · 数据源 daily_digest.jsonl（{len(hist)} 轮历史）
+    <div id="freshness">⏳ 正在核对远端 daily_digest.jsonl …</div>
+  </div>
 
   <div class="grid">
     {kpi_card("结构 FDR (best_q)", _num(q,4), f"阈值 {FDR_Q} / alert {ALERT_Q}", q_color, ok=(q<FDR_Q))}
-    {kpi_card("coverage (评估算子数)", str(s.get('coverage','?')), f"精英 {s.get('elite_count','?')} · 唯一 {s.get('n_unique','?')}", "#4ea1ff")}
-    {kpi_card("样本外方向准确率", _num(oos_acc,3), f"随机基线 {_num(oos_sur,3)} · p={_num(oos_p,4)}", "#ffb454", ok=oos_ok)}
-    {kpi_card("OOT 盲测命中率", _num(oot_hit,3), f"冻结规则盲打未来 · p={_num(oot_p,4)} · n={oot_n} (需结构FDR显著方作数)", "#ff8fab", ok=oot_ok)}
-    {kpi_card("谱扫描筛查 q", _num(spectral_q,4), f"{spectral_n}组合枚举 · 秩FDR {_num(spectral_q_rank,4)} · 最强 {_esc(spectral_sig or '—')}/{_esc(spectral_test or '—')} · z峰值 {_num(spectral_z,1)}" + (f" · OOT p={_num(spectral_oot_p,4)}{'✓' if spectral_oot_above else ''}" if spectral_oot_p is not None else " · (OOT未触发)"), "#ffd166", ok=spec_ok)}
+    {kpi_card("coverage (评估算子数)", str(coverage), f"精英 {elite} · 唯一 {n_unique}", "#4ea1ff")}
+    {kpi_card("样本外方向准确率", _num(oos_acc,3), f"随机基线 {_num(oos_sur,3)} · p={_num(oos_p,4)} · n={oos_n}", "#ffb454", ok=(oos_above and q<FDR_Q))}
+    {kpi_card("OOT 盲测命中率", _num(oot_hit,3) if oot_hit is not None else "—", f"冻结规则盲打未来 · p={_num(oot_p,4)} · n={oot_n} (需结构FDR显著方作数)", "#ff8fab", ok=oot_ok)}
+    {kpi_card("谱扫描筛查 q", _num(spectral_q,4) if spectral_q is not None else "—", f"{spectral_n}组合枚举 · 秩FDR {_num(spectral_rank,4)} · 最强 {_esc(spectral_sig or '—')}/{_esc(spectral_test or '—')} · z峰值 {_num(spectral_z,1)}" + (f" · OOT p={_num(spectral_oot_p,4)}{'✓' if spectral_oot_above else ''}" if spectral_oot_p is not None else " · (OOT未触发)") + (f" · {_esc(spectral_verdict)}" if spectral_verdict else ""), "#ffd166", ok=spec_ok)}
     {kpi_card("因果耦合 (CCM/Granger)", _num(causal_best,4) if causal_best is not None else "—", f"最强 {_esc(causal_sig or '—')}/{_esc(causal_test or '—')} · CCM ρ={_num(ccm_rho,3) if ccm_rho is not None else '—'} · Granger F={_num(granger_f,3) if granger_f is not None else '—'}" + (f" · p={_num(causal_p,4)}" if causal_p is not None else ""), "#c77dff", ok=causal_ok)}
-    {kpi_card("发现/确认分离闸门 (#41)", _esc(s.get('wf_verdict') or '—'), f"确认合并p={_num(s.get('wf_conf_p',1),4)} · 发现p={_num(s.get('wf_disc_p',1),4)} · 多数折确认 {s.get('wf_n_confirm','?')}/{s.get('wf_n_folds','?')}", "#52d1ff" if (s.get('wf_verdict') in ('NULL','UNCONFIRMED')) else ("#3ddc84" if s.get('wf_verdict')=='SIGNAL' else "#ff6b6b"), ok=(s.get('wf_verdict')=='SIGNAL'))}
-    {kpi_card("非平稳监控 (磨损/动量)", ("NULL" if ns_ok else "异常"), f"漂移显著 {ns_n_drift or 0} 球 · 动量 {ns_n_mom or 0} 球 · 最强漂移 {_esc(ns_best_drift_sig or '—')}={_num(ns_best_drift_val,4)} q={_num(ns_best_drift_q,4)} · 最强动量 {_esc(ns_best_mom_sig or '—')}={_num(ns_best_mom_val,4)} q={_num(ns_best_mom_q,4)}", "#9aa0ff", ok=ns_ok)}
-    {kpi_card("零假设交叉一致", "是" if consistent else "否", f"primary({_esc(cpt)})={_num(cp,4) if cp is not None else '—'}", "#3ddc84" if consistent else "#ff6b6b", ok=cross_ok)}
+    {kpi_card("发现/确认分离闸门 (#41)", _esc(wf or '—'), f"确认合并p={_num(wf_conf_p,4)} · 发现p={_num(wf_disc_p,4)} · 多数折确认 {wf_nc}/{wf_nf}", wf_color, ok=(wf=='SIGNAL'))}
+    {kpi_card("非平稳监控 (磨损/动量)", ("NULL" if ns_ok else "异常"), f"漂移显著 {ns_n_drift or 0} 球 · 动量 {ns_n_mom or 0} 球 · 最强漂移 {_esc(ns_d_sig or '—')}={_num(ns_d_val,4)} q={_num(ns_d_q,4)} · 最强动量 {_esc(ns_m_sig or '—')}={_num(ns_m_val,4)} q={_num(ns_m_q,4)}", "#9aa0ff", ok=ns_ok)}
+    {kpi_card("零假设交叉一致", _yn(consistent), f"primary({_esc(cross_type)})={_num(cross_primary,4) if cross_primary is not None else '—'}", "#3ddc84" if consistent else "#ff6b6b", ok=consistent)}
     {kpi_card("ALERT", "触发" if alert else "未触发", f"门槛 q&lt;{ALERT_Q} & OOS p&lt;{OOS_P}", "#3ddc84" if alert else "#ff6b6b", ok=alert)}
     {kpi_card("前瞻样本", f"{n_issues} 期", f"最新 {_esc(last_issue)} · 本轮新增 {added}", "#a78bfa")}
   </div>
 
   <div class="panel"><h2>当前结论（诚实判定）</h2>
-    <div class="verdict">{verdict_text(s)}</div>
+    <div class="verdict">{verdict_text(latest)}</div>
     <div class="note">说明：best_q 在 0.017–0.97 间剧烈漂移，表明搜索前沿尚未收敛；早期短暂出现的
-      "候选"已回落。任何声称"找到公式"的结论都必须先冻结公式、在 26094+ 新开奖上前瞻验证成立。</div>
+      "候选"已回落。任何声称"找到公式"的结论都必须先冻结公式、在 26094+ 新开奖上前瞻验证成立。
+      备注：{_esc(note)}</div>
   </div>
 
-  <div class="panel"><h2>趋势</h2>
+  {prone_box}
+  {pc_box}
+
+  <div class="panel"><h2>趋势（来自 daily_digest.jsonl 历史）</h2>
     <div class="charts">
       <div>{svg_line(q_series, threshold=FDR_Q, color="#4ea1ff", title="best_q 历史 (FDR 阈值 0.05)")}</div>
       <div>{svg_line(cov_series, ymin=0, ymax=max([c for _,c in cov_series]+[1]), color="#3ddc84", title="coverage 累计")}</div>
@@ -279,10 +384,9 @@ def build(s):
 
   <div class="panel"><h2>当前最优候选（leaderboard Top1）</h2>
     <table>
-      <tr><th>信号</th><td>{_esc(top.get('sig','—'))}</td><th>检验</th><td>{_esc(top.get('test','—'))}</td></tr>
-      <tr><th>p_raw</th><td>{_num(top.get('p_raw',1),4)}</td><th>FDR q</th><td>{_num(top.get('q',1),4)}</td></tr>
-      <tr><th>stat</th><td>{_num(top.get('stat',0),4)}</td><th>z</th><td>{_num(top.get('z',0),3)}</td></tr>
-      <tr><th>verdict</th><td colspan="3">{_esc(top.get('verdict','—'))}</td></tr>
+      <tr><th>信号</th><td>{_esc(best_sig)}</td><th>检验</th><td>{_esc(best_test)}</td></tr>
+      <tr><th>p_raw</th><td>{_num(best_p,4)}</td><th>FDR q</th><td>{_num(q,4)}</td></tr>
+      <tr><th>样本外 p</th><td>{_num(oos_p_val,4) if oos_p_val is not None else '—'}</td><th>verdict</th><td>{_esc(latest.get('verdict','—'))}</td></tr>
     </table>
   </div>
 
@@ -298,29 +402,77 @@ def build(s):
       最新已抓期号：{_esc(last_issue)}。若 added 长期为 0，说明官方尚未开新奖或抓取失败——前瞻验证须等真实新数据。</div>
   </div>
 
-  <div class="note">本看板由 run_cycle 每轮自动生成，经 CloudStudio 部署到腾讯云。全部统计闸门
-    (BH-FDR 多重比较校正、AAFT/IAAFT/shuffle/twin 四零假设交叉、样本外验证、Out-of-Time 盲测、
-    <b>直接谱扫描兜底</b>、<b>发现/确认分离 (#41)</b>) 均为预注册，不人为调高显著性。
-    谱扫描枚举全部基信号 × 谱/自相关检验（fft_peak/acf_max/dfa_alpha/mi_max），独立于演化搜索，
-    补全"演化漏检具体 (信号,检验) 组合"盲区；OOT 盲测将演化(前85%训练)与盲测(末段未来)彻底隔离；
-    <b>发现/确认分离闸门进一步深化 honesty</b>：候选一旦选定即冻结，在发现阶段从未见过的滚动未来段上
-    跨折独立确认（Fisher 合并 + 多数折确认），专门拦截"候选在全量数据上被挑出→再在尾部验证"的
-    选择性偏差——这正是自演进系统最易翻车处。SIGNAL(结构在独立未来复现)/UNCONFIRMED(只活在发现集，
-    闸门已拦截)/NULL(无结构) 三态互斥。</div>
-</div></body></html>"""
+  <div class="panel"><h2>历史轮次（最近 12 轮）</h2>
+    <table>
+      <tr><th>cycle</th><th>时间</th><th>best_q</th><th>最优</th><th>verdict</th><th>wf</th><th>谱</th><th>伪结构</th></tr>
+      {hist_rows}
+    </table>
+  </div>
+
+  <div class="note">本看板由 make_dashboard 直接读取 <b>daily_digest.jsonl</b>（run_cycle 每轮追加的"完整结论载荷"日志）生成，
+    并经 CloudStudio 部署到腾讯云。页面加载后会 fetch 同源 daily_digest.jsonl 直接解读——若远端已有更新的 cycle，
+    将自动刷新以展示最新结论。全部统计闸门 (BH-FDR 多重比较校正、AAFT/IAAFT/shuffle/twin/四零假设交叉、样本外验证、
+    Out-of-Time 盲测、<b>直接谱扫描兜底</b>、<b>发现/确认分离 (#41)</b>、<b>随机对照闸门拦截构造伪结构</b>) 均为预注册，
+    不人为调高显著性。SIGNAL(结构在独立未来复现)/UNCONFIRMED(只活在发现集，闸门已拦截)/NULL(无结构) 三态互斥。</div>
+</div>
+
+<script>
+// ── 运行时直接解读 daily_digest.jsonl ──────────────────────
+(function(){{
+  var EMBEDDED = {embed};
+  function setFresh(msg, isLive){{
+    var el = document.getElementById('freshness');
+    if(!el) return;
+    el.textContent = (isLive ? '🔄 ' : '⏳ ') + msg;
+  }}
+  function tryReload(remoteLatest){{
+    if(remoteLatest && EMBEDDED.latest_cycle!=null &&
+       Number(remoteLatest.cycle_id) > Number(EMBEDDED.latest_cycle)){{
+      setFresh('检测到更新 cycle '+remoteLatest.cycle_id+'，正在刷新…', true);
+      setTimeout(function(){{ location.reload(); }}, 400);
+      return true;
+    }}
+    return false;
+  }}
+  function parseJSONL(text){{
+    var recs=[]; var lines=text.split(/\\r?\\n/);
+    for(var i=0;i<lines.length;i++){{ var l=lines[i].trim(); if(!l) continue;
+      try{{ recs.push(JSON.parse(l)); }}catch(e){{}} }}
+    return recs;
+  }}
+  function check(){{
+    fetch('./daily_digest.jsonl', {{cache:'no-store'}}).then(function(r){{ return r.text(); }})
+      .then(function(t){{
+        var recs=parseJSONL(t);
+        if(!recs.length){{ setFresh('远端无数据', false); return; }}
+        if(tryReload(recs[recs.length-1])) return;
+        setFresh('已核对·数据新鲜（远端最新 cycle '+recs[recs.length-1].cycle_id+' @ '+recs[recs.length-1].ts+'）', false);
+      }})
+      .catch(function(e){{
+        setFresh('无法读取远端 daily_digest.jsonl（将显示已部署版本）', false);
+      }});
+  }}
+  check();
+  setInterval(check, 2*60*60*1000);  // 每 2 小时核对一次
+}})();
+</script>
+</body></html>"""
     return html_doc
 
 
 def main():
-    try:
-        s = json.load(open(STATE, encoding="utf-8"))
-    except Exception as e:
-        s = {"updated": str(datetime.datetime.now()), "error": str(e)}
     os.makedirs(OUT_DIR, exist_ok=True)
-    doc = build(s)
+    records = load_digest(DIGEST)
+    doc = build(records)
     with open(OUT, "w", encoding="utf-8") as f:
         f.write(doc)
-    print(f"[dashboard] wrote {OUT} ({len(doc)} bytes)")
+    print(f"[dashboard] wrote {OUT} ({len(doc)} bytes, {len(records)} cycles)")
+    # 复制 daily_digest.jsonl 到 dashboard/ 目录，使 fetch 同源可用
+    try:
+        shutil.copy2(DIGEST, os.path.join(OUT_DIR, "daily_digest.jsonl"))
+        print(f"[dashboard] copied daily_digest.jsonl -> {OUT_DIR}")
+    except Exception as e:
+        print(f"[dashboard] 复制 jsonl 失败(不影响主流程): {e}")
 
 
 if __name__ == "__main__":
