@@ -90,12 +90,27 @@ def acquire_lock():
 
 
 def load_cfg():
+    """读取引擎配置：YAML(engine.yaml) 为 canonical 源，config.json 覆盖部署键。
+
+    注意：本函数此前只读了 config.json，导致 engine.yaml 的 schedule_mode 等键
+    从未生效（daemon 一直落到 schedule_hours 兜底=定时模式）。现在与 run_cycle.load_cfg
+    保持一致——先 YAML 后 config.json 覆盖。"""
+    cfg = {}
+    # 1) YAML（configs/engine.yaml）作为 canonical 源
+    try:
+        sys.path.insert(0, HERE)
+        from configs import load_engine_config
+        cfg.update(load_engine_config())
+    except Exception:
+        pass
+    # 2) config.json 覆盖（部署键如 http_port / schedule_hours 应留在此）
     for base in (DATA_DIR, HERE):
         try:
-            return json.load(open(os.path.join(base, "config.json"), encoding="utf-8"))
+            cfg.update(json.load(open(os.path.join(base, "config.json"), encoding="utf-8")))
+            break
         except Exception:
             continue
-    return {}
+    return cfg
 
 
 def _log(msg):
