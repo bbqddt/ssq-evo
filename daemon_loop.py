@@ -1,7 +1,19 @@
 # -*- coding: utf-8 -*-
 """
 daemon_loop.py —— 7x24 常驻循环（配合 nssm 注册为 Windows 服务，或计划任务 SYSTEM 开机自启）
-每 schedule_hours 小时跑一轮 run_cycle，断网时自动跳过抓取继续用本地数据。
+
+调度模式（优先级从高到低）：
+  1. 环境变量 CYCLE_MINUTES：
+     =0 或负数 → 连续模式(60s 冷却)，每轮都跑全量 cycle（兼容旧行为）
+     >0        → 定时模式，每 N 分钟跑一轮
+  2. config.json 的 schedule_mode="data_driven"（推荐）：
+     无新数据时每 idle_minutes 检查一次(轻量，不跑 cycle)；
+     新数据到达时立即触发全量评估 + 摘要。
+     这让引擎从"同一数据反复空转"变为"等新开奖→响应→再等"，真正实现定时回馈。
+
+日志改进：子进程输出逐行实时落盘（不再黑洞），cycle 摘要写入 daily_digest.jsonl（追加式 JSONL），
+供外部/看板直接读取结论，不依赖解析 daemon.log。
+
 启动：python daemon_loop.py
 """
 import os, sys, time, subprocess, json, errno, atexit
@@ -11,13 +23,14 @@ sys.path.insert(0, HERE)
 
 DATA_DIR = os.environ.get("DATA_DIR") or r"D:\ssq_evo_data"
 LOCK = os.path.join(DATA_DIR, "daemon.lock")
+DIGEST = os.path.join(DATA_DIR, "daily_digest.jsonl")
 
-# 跨平台 PID 存活检测
+# ── 跨平台 PID 存活检测 ──────────────────────────────────────────────
 def _pid_alive(pid):
     if sys.platform == "win32":
         try:
             import ctypes
-            h = ctypes.windll.kernel32.OpenProcess(0x0400, False, pid)  # PROCESS_QUERY_INFORMATION
+            h = ctypes.windll.kernel32.OpenProcess(0x0400, False, pid)
             if h == 0:
                 return False
             ctypes.windll.kernel32.CloseHandle(h)
@@ -31,12 +44,14 @@ def _pid_alive(pid):
         except OSError:
             return False
 
+
 def _release_lock():
     try:
         if os.path.exists(LOCK):
             os.remove(LOCK)
     except OSError:
         pass
+
 
 def acquire_lock():
     """原子创建锁文件并写入 PID；若已有存活实例则退出，避免多开抢 frontier.json。"""
@@ -46,7 +61,6 @@ def acquire_lock():
         except OSError as e:
             if e.errno != errno.EEXIST:
                 raise
-            # 锁已存在：判断持有者是否存活
             oldpid = None
             try:
                 with open(LOCK) as f:
@@ -57,16 +71,13 @@ def acquire_lock():
             if oldpid and _pid_alive(oldpid):
                 print(f"[daemon] 已有实例 PID={oldpid} 运行中，本进程退出", flush=True)
                 sys.exit(0)
-            # 陈旧锁 -> 移除后重试
             try:
                 os.remove(LOCK)
             except OSError:
                 pass
             continue
-        # 成功创建，立即写入 PID
         os.write(fd, str(os.getpid()).encode())
         os.close(fd)
-        # 二次校验：确认锁仍归自己（极小概率被抢占）
         try:
             with open(LOCK) as f:
                 if f.read().strip() != str(os.getpid()):
@@ -77,18 +88,119 @@ def acquire_lock():
         atexit.register(_release_lock)
         return
 
+
 def load_cfg():
-    # 优先 DATA_DIR(运行时配置，Docker 挂载卷)；回退 HERE(代码目录)。
-    # 这样本机与容器共用同一份 config(D:\ssq_evo_data\config.json)，避免两份配置漂移。
     for base in (DATA_DIR, HERE):
         try:
             return json.load(open(os.path.join(base, "config.json"), encoding="utf-8"))
         except Exception:
             continue
-    return {"schedule_hours": 0.25}   # 默认 15 分钟；可用 CYCLE_MINUTES 环境变量覆盖
+    return {}
+
+
+def _log(msg):
+    """写日志 + flush。"""
+    print(msg, flush=True)
+
+
+def run_cycle_subprocess(py):
+    """运行一轮 run_cycle，逐行实时落盘子进程输出（修复 Docker 日志黑洞）。"""
+    log_path = os.path.join(DATA_DIR, "daemon.log")
+    try:
+        proc = subprocess.Popen(
+            [py, "-u", os.path.join(HERE, "run_cycle.py")],
+            cwd=HERE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            bufsize=1,  # line-buffered
+        )
+        with open(log_path, "a", encoding="utf-8") as lf:
+            for raw_line in iter(proc.stdout.readline, b""):
+                line = raw_line.decode("utf-8", errors="replace")
+                lf.write(line)
+                lf.flush()
+        proc.wait(timeout=1800)  # 单轮最长 30min 防死循环
+        return proc.returncode
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        _log("[daemon] cycle 超时(30min), 已强杀")
+        return -1
+    except Exception as e:
+        _log(f"[daemon] cycle 异常: {e}")
+        return -1
+
+
+def get_last_issue():
+    """读取 state.json 中记录的最新期号（无 state 则返回 None）。"""
+    sp = os.path.join(DATA_DIR, "state.json")
+    try:
+        s = json.load(open(sp, encoding="utf-8"))
+        return s.get("last_issue")
+    except Exception:
+        return None
+
+
+def check_new_data(py):
+    """轻量检查是否有新开奖数据（调 data.fetch_recent 不跑 cycle）。
+    返回 (new_count, latest_issue) 或 (0, None)。
+    """
+    try:
+        proc = subprocess.run(
+            [py, "-c",
+             "import sys; sys.path.insert(0,'" + HERE.replace("\\","/") + "');"
+             "import data as D; f=D.fetch_recent();"
+             "print(len(f) if f else -1);"
+             "print(f[-1][0] if f else 'NONE') if f else print('NONE')"],
+            capture_output=True, text=True, timeout=60, cwd=HERE,
+        )
+        out = proc.stdout.strip().splitlines()
+        if len(out) >= 2 and out[0].isdigit():
+            total = int(out[0])
+            latest = out[1].strip()
+            last = get_last_issue()
+            if last and latest > last:
+                # 粗略估算新增：不能精确知道（fetch 返回全量），用最新期号差上界
+                return min(total, 10), latest  # 双色球每周3期，最多新增~3-4期
+            return 0, latest
+        return 0, None
+    except Exception as e:
+        _log(f"[daemon] 数据检查异常: {e}")
+        return 0, None
+
+
+def print_daily_summary():
+    """从 daily_digest.jsonl 读最近 N 条摘要，打印人可读的日报。"""
+    if not os.path.exists(DIGEST):
+        _log("[digest] 尚无摘要记录（首轮 cycle 完成后将生成）")
+        return
+    try:
+        lines = open(DIGEST, encoding="utf-8").readlines()
+        recent = [json.loads(l) for l in lines[-24:]]  # 最近 24 条
+        if not recent:
+            return
+        last = recent[-1]
+        alerts = sum(1 for r in recent if r.get("alert"))
+        artifacts = set()
+        for r in recent:
+            for a in (r.get("artifact_prone") or []):
+                artifacts.add(a)
+        _log("=" * 60)
+        _log(f"[日报] 截止 {last['ts']}  |  cycle {last['cycle_id']}  |  "
+             f"{last['n_issues']}期  |  最新={last.get('last_issue','?')}  "
+             f"新增={last.get('added',0)}")
+        _log(f"[日报] 最佳: {last.get('best_sig')}/{last.get('best_test')}  "
+             f"q={last.get('best_q')}  |  判定: {last.get('verdict')}  |  "
+             f"备注: {last.get('note','?')}")
+        _log(f"[日报] 覆盖度: {last.get('coverage')}  |  "
+             f"最近{len(recent)}轮 ALERT次数: {alerts}  |  "
+             f"构造伪结构: {sorted(artifacts) if artifacts else '无'}")
+        if last.get("wf_verdict"):
+            _log(f"[日报] Walk-Forward: {last['wf_verdict']}")
+        _log("=" * 60)
+    except Exception as e:
+        _log(f"[日报] 生成失败: {e}")
+
 
 def main():
-    # 日志落盘（追加），便于监控；子进程 run_cycle 继承此 stdout
+    # 日志落盘（追加），便于监控
     try:
         _lf = open(os.path.join(DATA_DIR, "daemon.log"), "a", encoding="utf-8")
         sys.stdout = _lf
@@ -96,34 +208,72 @@ def main():
     except Exception:
         pass
     acquire_lock()
+
     cfg = load_cfg()
-    # 优先环境变量 CYCLE_MINUTES（分钟）；0 或负数 = 连续模式(仅 60s 冷却)
-    minutes = None
+    py = sys.executable
+
+    # ── 调度模式解析 ────────────────────────────────────────────────
     env_min = os.environ.get("CYCLE_MINUTES")
     if env_min is not None:
         try:
             minutes = float(env_min)
         except ValueError:
             minutes = None
-    if minutes is not None:
-        hours = 0.0 if minutes <= 0 else minutes / 60.0
+        if minutes is not None:
+            if minutes <= 0:
+                mode = "continuous"
+                label = "连续(60s冷却)"
+            else:
+                mode = "timed"
+                label = f"定时({minutes}分钟)"
+    elif cfg.get("schedule_mode") == "data_driven":
+        mode = "data_driven"
+        idle_min = float(cfg.get("idle_minutes", 360))   # 无新数据时休眠间隔(默认6h)
+        check_min = float(cfg.get("check_minutes", 60))   # 休眠中多久查一次新数据(默认1h)
+        label = f"数据驱动(空闲{idle_min}min/检查{check_min}min)"
     else:
         hours = float(cfg.get("schedule_hours", 0.25))
-    py = sys.executable
-    label = "连续(60s冷却)" if hours == 0 else f"{hours}h"
-    print(f"[daemon] 常驻启动，周期 {label}，PID={os.getpid()}，锁={LOCK}")
-    while True:
-        try:
-            subprocess.run([py, "-u", os.path.join(HERE, "run_cycle.py")],
-                           cwd=HERE, check=False)
-        except Exception as e:
-            print("[daemon] cycle error:", e, flush=True)
         if hours == 0:
-            print("[daemon] 连续模式，60s 后下一轮", flush=True)
-            time.sleep(60)
+            mode = "continuous"
+            label = "连续(60s冷却)"
         else:
-            print(f"[daemon] 下一轮在 {hours}h 后", flush=True)
-            time.sleep(hours * 3600)
+            mode = "timed"
+            minutes = hours * 60
+            label = f"定时({minutes:.0f}分钟)"
+
+    _log(f"[daemon] 常驻启动 PID={os.getpid()} 模式={label} 锁={LOCK}")
+
+    # 启动时打印最近日报
+    print_daily_summary()
+
+    # ── 主循环 ───────────────────────────────────────────────────────
+    if mode == "data_driven":
+        while True:
+            # 1. 检查新数据
+            n_new, latest = check_new_data(py)
+            if n_new > 0:
+                _log(f"[daemon] ★ 检测到新数据! 最新={latest}, 约{n_new}期新 → 触发全量评估")
+                run_cycle_subprocess(py)
+                print_daily_summary()
+                _log(f"[daemon] 全量完成，{idle_min:.0f}min 后再次检查")
+                time.sleep(idle_min * 60)
+            else:
+                _log(f"[daemon] 无新数据(当前最新≈{latest or '?'})，{check_min:.0f}min 后复查")
+                time.sleep(check_min * 60)
+
+    elif mode == "continuous":
+        while True:
+            run_cycle_subprocess(py)
+            _log("[daemon] 连续模式，60s 后下一轮")
+            time.sleep(60)
+
+    else:  # timed
+        sleep_sec = minutes * 60
+        while True:
+            run_cycle_subprocess(py)
+            _log(f"[daemon] 定时模式，{sleep_sec:.0f}s 后下一轮")
+            time.sleep(sleep_sec)
+
 
 if __name__ == "__main__":
     main()

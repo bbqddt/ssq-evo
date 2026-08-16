@@ -15,10 +15,12 @@ state.*.json
 ssq_master.csv
 dashboard/
 eval_cache.json
+artifact_prone.json
+daily_digest.jsonl
+daemon.log
+audit/
 # 扩轴+分层空模型证据账本（运行时追加写，不进仓库）
 evidence_ledger.json
-# 本地引擎日志
-daemon.log
 
 # 项目记忆/工具元数据（不进仓库）
 .workbuddy/

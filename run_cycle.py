@@ -320,6 +320,7 @@ def main():
     reds, blues, issues = D.to_arrays(master)
     N = len(reds)
     print(f"[cycle] N={N} 期, 新增 {added}, 末期 {issues[-1]}")
+    sys.stdout.flush()  # 确保 daemon 日志即时可见
 
     # 2. 演化（接入跨轮 frontier：精英 seed + 参数 hill-climbing + 去重）
     rng = np.random.default_rng(cfg["seed"] + N)  # 随样本量变化种子，避免每轮完全相同
@@ -683,6 +684,7 @@ def main():
               f"AAFT p={cross.get('aaft')}  IAAFT p={cross.get('iaaft')}  "
               f"三零假设一致显著={cross.get('consistent')}")
     print(f"[cycle] state -> {STATE}")
+    sys.stdout.flush()
 
     # 8c. 生成监控看板 (自包含 HTML，供 CloudStudio 部署到腾讯云作为第三辆车的可视化/分享层)
     try:
@@ -690,6 +692,30 @@ def main():
         make_dashboard.main()
     except Exception as de:
         print(f"[cycle] dashboard 生成失败(不影响主流程): {de}")
+
+    # 8c2. 周期摘要持久化 (追加式; 供外部读取引擎结论, 不依赖解析 daemon.log 黑洞)
+    _digest_path = os.path.join(DATA_DIR, "daily_digest.jsonl")
+    try:
+        _digest_entry = {
+            "ts": run["ts"], "cycle_id": rid, "n_issues": N,
+            "last_issue": issues[-1], "added": added,
+            "best_sig": best["sig"], "best_test": best["test"],
+            "best_q": round(best_q, 6), "best_p": round(best["p_raw"], 6),
+            "verdict": best.get("verdict", "?"),
+            "coverage": fr["coverage"],
+            "alert": bool(alert),
+            "artifact_prone": sorted(prone)[:12],
+            "wf_verdict": (wf["verdict"] if wf else None),
+            "spectral_verdict": spec.get("verdict"),
+            "note": ("候选结构! 需人工复核" if alert else
+                    ("ARTIFACT" if best["sig"] in prone else "NULL(无经确认结构)")),
+        }
+        with open(_digest_path, "a", encoding="utf-8") as _df:
+            _df.write(json.dumps(_digest_entry, ensure_ascii=False) + "\n")
+        print(f"[cycle] 摘要已写入 {_digest_path}")
+    except Exception as _de:
+        print(f"[cycle] 摘要写入失败(不影响主流程): {_de}")
+    sys.stdout.flush()
 
     # 8d. 红队自审（诚实守护，只读；默认关闭，不扰生产）
     if cfg.get("redteam_audit_enabled", False):
