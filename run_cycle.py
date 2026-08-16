@@ -179,6 +179,44 @@ def self_check(state, acc, cfg):
     return result
 
 
+# ============================================================
+# 随机数据对照闸门（构造伪结构拦截） —— 接进常驻引擎主干
+# ------------------------------------------------------------
+# 任何基信号若在「纯随机双色球」上也 SURVIVOR，说明其显著来自信号构造本身
+# （如 red_recurrence_mean 的 N 惩罚尖峰），而非彩票结构。此类信号在 FDR / 最优
+# 选择 / 谱报警中一律降级，绝不计入真实候选。结果按 N 缓存（确定性，跨 cycle 复用）。
+# ============================================================
+def artifact_prone_signals(N, cfg):
+    """返回在纯随机数据上仍 SURVIVOR 的基信号集合（构造伪结构）。"""
+    cache_path = os.path.join(DATA_DIR, "artifact_prone.json")
+    try:
+        if os.path.exists(cache_path):
+            d = json.load(open(cache_path, encoding="utf-8"))
+            if d.get("N") == N:
+                return set(d.get("signals", []))
+    except Exception:
+        pass
+    import representation_zoo as RZ
+    import run_axes as RA
+    RZ.register()
+    seed = int(cfg.get("seed", 20260813))
+    prone = set()
+    tests = ["acf_max", "mi_max", "perm_entropy", "fft_peak"]
+    for sig in E.SIGMAPS:
+        try:
+            ctrl = RA.random_control_label(sig, tests, N, seed=seed + 1, k_sur=60)
+        except Exception:
+            continue
+        if ctrl == "SURVIVOR":
+            prone.add(sig)
+    try:
+        json.dump({"N": N, "signals": list(prone)},
+                  open(cache_path, "w", encoding="utf-8"))
+    except Exception:
+        pass
+    return prone
+
+
 def load_cfg():
     cfg = dict(DEFAULT_CFG)
     # 1) 外部化 YAML（configs/engine.yaml）作为引擎参数的 canonical 源
@@ -347,11 +385,26 @@ def main():
           f" | 最强漂移 {bd[0]}{bd[1]} q={ns['best_q_drift']:.4g}"
           f" | 最强动量 {bm[0]}{bm[1]} q={ns['best_q_mom']:.4g}")
 
+    # 3a. 随机数据对照闸门（构造伪结构拦截）：预计算每个基信号在纯随机数据上是否也 SURVIVOR。
+    #     若是 => 该信号构造本身产生伪结构（如 red_recurrence_mean 的 N 惩罚尖峰），
+    #     在下方 FDR / 最优选择 / 谱报警中降级，绝不计入真实候选。
+    prone = artifact_prone_signals(N, cfg)
+    if prone:
+        print(f"[cycle] 随机对照闸门: {len(prone)} 个基信号判为构造伪结构 {sorted(prone)}")
+    else:
+        print("[cycle] 随机对照闸门: 无构造伪结构信号")
+
     # 3. FDR (跨全部评估)
     pvals = np.array([e["p_raw"] for e in all_evals])
     qs = E.bh_fdr(pvals)
     for e, q in zip(all_evals, qs):
         e["q"] = float(q)
+        if e["sig"] in prone:
+            # 构造伪结构：随机数据上也显著 => 降级，不计入 FDR 显著 / 最优 / 报警
+            e["artifact_prone"] = True
+            e["q"] = 1.0
+            e["verdict"] = "构造伪结构[随机对照闸门]"
+            continue
         if q < 0.05:
             e["verdict"] = "显著(<0.05)"
         elif q < 0.2:
@@ -392,6 +445,13 @@ def main():
     oot = None
     if lb_items:
         oot = E.out_of_time(top, reds, blues, rng, train_frac=0.85, k_sur=cfg["k_light"])
+
+    # 5e 前置：随机对照闸门作用于谱扫描——若最强谱组合来自构造伪结构信号，
+    # 降级 spec 并抑制报警（避免如 red_recurrence_mean 的 N 惩罚尖峰被误报为谱信号）。
+    if spec.get("best_sig") in prone:
+        spec["q_min"] = 1.0
+        spec["verdict"] = "构造伪结构[随机对照闸门]"
+        print(f"[cycle] 谱扫描最强信号 {spec['best_sig']} 被判构造伪结构(随机对照闸门)，已降级")
 
     # 5e. 谱扫描独立闸门（灵敏度探测器）：若 z-FDR 显著，对最强谱组合跑 OOT 盲测验证，
     # 防止 z 偶然尖峰误报。这是演化搜索的兜底——演化漏掉的周期/自相关结构在此独立裁决。
@@ -493,6 +553,7 @@ def main():
         "df_gen": df_gen, "df_added": df_added,
         "positive_control": pc,   # 持续阳性对照：闸门功率监控（None=本轮未跑）
         "alert": alert, "coverage": fr["coverage"],
+        "artifact_prone_n": len(prone), "artifact_prone": sorted(prone)[:12],
         "note": ("候选结构! 需人工复核" if alert else "无超越随机的可提取结构 (null)"),
     }
     rid = S.insert_run(con, run)
@@ -568,6 +629,7 @@ def main():
         "ns_best_mom_q": round(ns["best_q_mom"], 4),
         "ns_verdict": ns["verdict"], "ns_k_sur": ns["k_sur"],
         "alert": bool(alert),
+        "artifact_prone_n": len(prone), "artifact_prone": sorted(prone),
         "n_eval": len(all_evals), "n_unique": len(leaderboard),
         "coverage": fr["coverage"], "elite_count": len(fr["elites"]),
         "best_z_history": z_hist,
