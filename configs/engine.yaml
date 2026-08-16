@@ -53,7 +53,8 @@ engine:
   #     未设置               — 回退到旧逻辑(CYCLE_MINUTES / schedule_hours)。
   #   idle_minutes:   无新数据时的休眠间隔(默认360=6h)
   #   check_minutes:  休眠中多久检查一次新数据(默认60=1h)
-  schedule:
-    schedule_mode: data_driven
-    idle_minutes: 360
-    check_minutes: 60
+  #   注意：schedule_mode 必须是顶层键（daemon 读 cfg.get("schedule_mode")），
+  #   不要包在 schedule: 父键下，否则读不到会回退到 schedule_hours 兜底。
+  schedule_mode: data_driven
+  idle_minutes: 360
+  check_minutes: 60
