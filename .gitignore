@@ -15,6 +15,8 @@ state.*.json
 ssq_master.csv
 dashboard/
 eval_cache.json
+# 扩轴+分层空模型证据账本（运行时追加写，不进仓库）
+evidence_ledger.json
 # 本地引擎日志
 daemon.log
 
