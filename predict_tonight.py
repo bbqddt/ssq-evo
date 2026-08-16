@@ -77,15 +77,60 @@ def random_pick(seed):
     return reds, blue
 
 
+# ---------------- 公式驱动预测（来自引擎进化出的存活信号）----------------
+def _red_gap_max(reds):
+    """引擎 best_sig=red_gap_max：排序红球相邻最大间隙（含 33->1 环绕）。"""
+    s = sorted(reds)
+    gaps = [s[i + 1] - s[i] for i in range(RED_PICK - 1)] + [s[0] + RED_N - s[-1]]
+    return max(gaps)
+
+
+SIGNAL_FUNCS = {"red_gap_max": _red_gap_max}
+
+
+def predict_from_signal(train, signal="red_gap_max", window=WINDOW, decay=DECAY,
+                        tol=1.6, regime_n=30):
+    """用引擎进化出的最佳存活信号(red_gap_max)作'态筛选器'：
+    取近期 signal 值均值作当前态(regime)，只聚合历史上落在该态 ±tol 的期，
+    再做递推加权边际取 top6+top1。这比裸全局边际更'由公式驱动'：
+    是信号决定了哪些历史期与当前相关，而非无差别全历史平均。"""
+    if signal not in SIGNAL_FUNCS:
+        raise ValueError(f"未知信号 {signal}")
+    f = SIGNAL_FUNCS[signal]
+    vals = [f(d["reds"]) for d in train]
+    regime = sum(vals[-regime_n:]) / min(regime_n, len(vals))
+    sel = [d for d, v in zip(train, vals) if abs(v - regime) <= tol]
+    if len(sel) < 20:
+        sel = train[-window:]  # 兜底
+    w = recency_weights(len(sel), decay)
+    red_score = [0.0] * (RED_N + 1)
+    blue_score = [0.0] * (BLUE_N + 1)
+    for d, wt in zip(sel, w):
+        for rb in d["reds"]:
+            red_score[rb] += wt
+        blue_score[d["blue"]] += wt
+    reds = sorted(range(1, RED_N + 1), key=lambda x: (-red_score[x], x))[:RED_PICK]
+    blue = max(range(1, BLUE_N + 1), key=lambda x: (blue_score[x], -x))
+    return sorted(reds), blue, {"signal": signal, "regime": round(regime, 3),
+                                "n_selected": len(sel), "tol": tol}
+
+
 # ---------------- 预注册 ----------------
-def register(issue, target_date, window=WINDOW, decay=DECAY):
+def register(issue, target_date, window=WINDOW, decay=DECAY, signal=None):
     draws = load_draws()
     # 该 issue 必须尚未开奖（主表里没有），否则不是"预测"而是"回测"
     known = {d["issue"] for d in draws}
     if issue in known:
         print(f"[register] 警告：主表已含 {issue}（已开奖），这不是预测而是回测。仍按已开奖处理。")
     # 用当前全部历史训练
-    reds, blue = predict(draws, window, decay)
+    if signal:
+        reds, blue, info = predict_from_signal(draws, signal, window, decay)
+        method = f"signal_regime_{signal}"
+        params = {"window": window, "decay": decay, "signal": signal, "regime_info": info}
+    else:
+        reds, blue = predict(draws, window, decay)
+        method = "recency_weighted_empirical_marginal"
+        params = {"window": window, "decay": decay}
     seed = int(issue)  # 确定性随机基线
     base_reds, base_blue = random_pick(seed)
 
@@ -93,21 +138,22 @@ def register(issue, target_date, window=WINDOW, decay=DECAY):
         "issue": issue,
         "target_date": target_date,
         "registered_ts": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "method": "recency_weighted_empirical_marginal",
-        "params": {"window": window, "decay": decay},
+        "method": method,
+        "params": params,
         "engine_forecast": {"reds": reds, "blue": blue},
         "random_baseline": {"reds": base_reds, "blue": base_blue, "seed": seed},
-        "verdict_context": "walk-forward=NULL; spectral=构造伪结构; 非验证模型; null域预注册猜测",
+        "verdict_context": "walk-forward=NULL; spectral=构造伪结构; 非验证模型; null域预注册猜测; 公式引擎best_sig=red_gap_max驱动",
         "scored": False,
     }
-    # 不可覆盖：若该 issue 已登记，保留原始时间戳
+    # 不可覆盖：若该 issue + 该方法已登记，保留原始时间戳（同 issue 允许多种方法并存）
     if os.path.exists(PRED_FILE):
         for line in open(PRED_FILE, encoding="utf-8"):
             line = line.strip()
             if not line:
                 continue
-            if json.loads(line).get("issue") == issue:
-                print(f"[register] {issue} 已于本文件登记，保留原始时间戳，不覆盖。")
+            d = json.loads(line)
+            if d.get("issue") == issue and d.get("method") == method:
+                print(f"[register] {issue} / {method} 已于本文件登记，保留原始时间戳，不覆盖。")
                 return
     with open(PRED_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -123,8 +169,9 @@ def load_preds():
 
 
 # ---------------- 历史滚动样本外回测 ----------------
-def backtest(n_range=500, window=WINDOW, decay=DECAY, n_random=200):
+def backtest(n_range=500, window=WINDOW, decay=DECAY, signal=None, n_random=200):
     draws = load_draws()
+    method_name = f"signal_regime_{signal}" if signal else "recency_marginal"
     # 目标期：从有足够前序历史的尾部取 n_range 个
     start = max(len(draws) - n_range, 200)
     targets = draws[start:]
@@ -134,7 +181,10 @@ def backtest(n_range=500, window=WINDOW, decay=DECAY, n_random=200):
     rand_blue_hits = 0
     for i, tgt in enumerate(targets):
         train = draws[: draws.index(tgt)]   # 严格前序
-        pr, pb = predict(train, window, decay)
+        if signal:
+            pr, pb, _ = predict_from_signal(train, signal, window, decay)
+        else:
+            pr, pb = predict(train, window, decay)
         ar, ab = set(tgt["reds"]), tgt["blue"]
         rh = len(set(pr) & ar)
         eng_red_hits.append(rh)
@@ -158,7 +208,7 @@ def backtest(n_range=500, window=WINDOW, decay=DECAY, n_random=200):
     exp_red = RED_PICK * (RED_PICK / RED_N)
     exp_blue = 1.0 / BLUE_N
 
-    print(f"=== 滚动样本外回测（{en} 期目标，尾窗={window}，衰减={decay}）===")
+    print(f"=== 滚动样本外回测 [{method_name}]（{en} 期目标，尾窗={window}，衰减={decay}）===")
     print(f"  引擎方法  红球命中均值 = {em:.4f}   蓝球命中率 = {eng_blue_hits/en:.4f}")
     print(f"  随机基线  红球命中均值 = {rm:.4f}   蓝球命中率 = {rand_blue_hits/rn:.4f}")
     print(f"  随机解析期望          红球命中 = {exp_red:.4f}   蓝球命中率 = {exp_blue:.4f}")
@@ -236,17 +286,21 @@ def main():
     r.add_argument("--date", required=True)
     r.add_argument("--window", type=int, default=WINDOW)
     r.add_argument("--decay", type=float, default=DECAY)
+    r.add_argument("--signal", default=None,
+                   help="用引擎进化出的存活信号作态筛选器(如 red_gap_max)，None=朴素递推边际")
     b = sub.add_parser("backtest")
     b.add_argument("--range", type=int, default=500)
     b.add_argument("--window", type=int, default=WINDOW)
     b.add_argument("--decay", type=float, default=DECAY)
+    b.add_argument("--signal", default=None,
+                   help="回测公式驱动方法(如 red_gap_max)；不填=朴素递推边际")
     s = sub.add_parser("score")
     s.add_argument("--issue", required=True)
     args = ap.parse_args()
     if args.cmd == "register":
-        register(args.issue, args.date, args.window, args.decay)
+        register(args.issue, args.date, args.window, args.decay, signal=args.signal)
     elif args.cmd == "backtest":
-        backtest(args.range, args.window, args.decay)
+        backtest(args.range, args.window, args.decay, signal=args.signal)
     elif args.cmd == "score":
         score(args.issue)
     else:
