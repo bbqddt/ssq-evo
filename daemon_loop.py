@@ -246,6 +246,12 @@ def main():
     # 启动时打印最近日报
     print_daily_summary()
 
+    # 启动即跑一次全量评估：应用 artifact 闸门 + 写摘要 + 校正 best_sig。
+    # 否则切到 data_driven 后会一直 idle 等数据，现有历史数据永不被处理/出结论。
+    _log("[daemon] 启动初始全量评估（应用随机对照闸门 + 写摘要）...")
+    run_cycle_subprocess(py)
+    print_daily_summary()
+
     # ── 主循环 ───────────────────────────────────────────────────────
     if mode == "data_driven":
         while True:

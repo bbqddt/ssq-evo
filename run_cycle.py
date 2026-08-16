@@ -6,7 +6,7 @@ run_cycle.py —— 一次完整演化周期
 用法：python run_cycle.py            # 抓取最新数据并跑一轮
       python run_cycle.py --no-fetch # 不联网，用本地主表重跑（断网/离线也持续产出）
 """
-import os, sys, json, argparse, datetime
+import os, sys, json, argparse, datetime, time
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -186,35 +186,56 @@ def self_check(state, acc, cfg):
 # （如 red_recurrence_mean 的 N 惩罚尖峰），而非彩票结构。此类信号在 FDR / 最优
 # 选择 / 谱报警中一律降级，绝不计入真实候选。结果按 N 缓存（确定性，跨 cycle 复用）。
 # ============================================================
-def artifact_prone_signals(N, cfg):
-    """返回在纯随机数据上仍 SURVIVOR 的基信号集合（构造伪结构）。"""
+def artifact_prone_signals(N, cfg, candidate_sigs=None):
+    """返回在纯随机数据上仍 SURVIVOR 的基信号集合（构造伪结构）。
+
+    关键性能修正：只对「真实数据上本身显著」的候选信号做随机对照，
+    而非遍历全部基信号——其它信号反正不会当选，无需查。
+    否则 33 信号 × 60 surrogate × 4 重型检验 的首跑会堵死整个 cycle
+    （实测连续模式 60s 一轮根本跑不完，daemon 卡死）。
+
+    - k_sur 降至 25（粗检足以识别「随机也显著」）
+    - 90s 墙钟预算，超时即停（剩余信号下轮补算），绝不拖垮 cycle
+    - 按 N 缓存已知的 prone 信号，跨 cycle 累积，越跑越快
+    """
     cache_path = os.path.join(DATA_DIR, "artifact_prone.json")
+    known_prone = set()
     try:
         if os.path.exists(cache_path):
             d = json.load(open(cache_path, encoding="utf-8"))
             if d.get("N") == N:
-                return set(d.get("signals", []))
+                known_prone = set(d.get("signals", []))
     except Exception:
         pass
     import representation_zoo as RZ
     import run_axes as RA
     RZ.register()
     seed = int(cfg.get("seed", 20260813))
-    prone = set()
     tests = ["acf_max", "mi_max", "perm_entropy", "fft_peak"]
-    for sig in E.SIGMAPS:
+    k_sur = int(cfg.get("artifact_k_sur", 25))
+    budget = float(cfg.get("artifact_budget_sec", 90))
+    t0 = time.time()
+    sigs_to_check = list(candidate_sigs) if candidate_sigs else list(E.SIGMAPS.keys())
+    n_checked = 0
+    for sig in sigs_to_check:
+        if sig in known_prone:
+            continue
         try:
-            ctrl = RA.random_control_label(sig, tests, N, seed=seed + 1, k_sur=60)
+            ctrl = RA.random_control_label(sig, tests, N, seed=seed + 1, k_sur=k_sur)
         except Exception:
             continue
+        n_checked += 1
         if ctrl == "SURVIVOR":
-            prone.add(sig)
+            known_prone.add(sig)
+        if time.time() - t0 > budget:
+            print(f"[cycle] 随机对照闸门: 超预算({budget:.0f}s)，已查{n_checked}个，剩余下轮补算")
+            break
     try:
-        json.dump({"N": N, "signals": list(prone)},
+        json.dump({"N": N, "signals": list(known_prone)},
                   open(cache_path, "w", encoding="utf-8"))
     except Exception:
         pass
-    return prone
+    return known_prone
 
 
 def load_cfg():
@@ -386,10 +407,12 @@ def main():
           f" | 最强漂移 {bd[0]}{bd[1]} q={ns['best_q_drift']:.4g}"
           f" | 最强动量 {bm[0]}{bm[1]} q={ns['best_q_mom']:.4g}")
 
-    # 3a. 随机数据对照闸门（构造伪结构拦截）：预计算每个基信号在纯随机数据上是否也 SURVIVOR。
-    #     若是 => 该信号构造本身产生伪结构（如 red_recurrence_mean 的 N 惩罚尖峰），
-    #     在下方 FDR / 最优选择 / 谱报警中降级，绝不计入真实候选。
-    prone = artifact_prone_signals(N, cfg)
+    # 3a. 随机数据对照闸门（构造伪结构拦截）：只对「真实数据上本身显著」的候选信号
+    #     做纯随机对照——若随机数据上也 SURVIVOR，说明显著来自信号构造本身
+    #     （如 red_recurrence_mean 的 N 惩罚尖峰），在 FDR / 最优 / 谱报警中降级。
+    #     只查候选信号 => 工作量从 33 信号降至个位数，首跑不再堵死 cycle。
+    cand_sigs = {e["sig"] for e in all_evals if e["p_raw"] < 0.2}
+    prone = artifact_prone_signals(N, cfg, candidate_sigs=cand_sigs)
     if prone:
         print(f"[cycle] 随机对照闸门: {len(prone)} 个基信号判为构造伪结构 {sorted(prone)}")
     else:

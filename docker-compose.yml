@@ -15,7 +15,8 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - DATA_DIR=/app/data          # 告诉引擎所有输出写到 /app/data（= D:\ssq_evo_data）
-      - CYCLE_MINUTES=0             # 连续模式(60s 冷却)，加快搜索频率
+      # 注意：不要设 CYCLE_MINUTES——设了会强制连续/定时模式，覆盖 engine.yaml 的
+      # schedule_mode: data_driven（数据驱动：无新数据 idle，新开奖到达即全量评估+摘要）。
     # 常驻循环：daemon_loop.py 连续跑(60s 冷却)
     # 启动前先清陈旧锁：容器进程固定 PID=1，若上次崩在锁上，遗留 lock="1" 会让新实例
     # 误判"已有实例运行中"而退出，配合 restart:unless-stopped 形成死循环。rm -f 根治之。
