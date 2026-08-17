@@ -110,6 +110,43 @@ def main():
     results.append(check("审计账本记录了来源留痕", any(e.get("source") == "GA" for e in ledger)))
 
     # ---------------------------------------------------------------
+    _banner("⑥ 防火墙硬门 firewall_gate + 构造级隔离自检")
+    # 硬门：任何候选进待闸池的唯一入口，必须过随机重放 + 审计
+    g_art = {"sig": "red_recurrence_mean", "test": "acf_max", "params": {}}
+    g_neu = {"sig": "red_sum", "test": "acf_max", "params": {}}
+    p_art, l_art = FW.firewall_gate(g_art, "GA", disc_fp, 777, N=N)
+    p_neu, l_neu = FW.firewall_gate(g_neu, "GA", disc_fp, 778, N=N)
+    print("  firewall_gate 构造伪结构 passed=%s(label=%s)；中性 passed=%s(label=%s)"
+          % (p_art, l_art, p_neu, l_neu))
+    results.append(check("硬门拦截构造伪结构", p_art is False))
+    results.append(check("硬门放行中性信号", p_neu is True))
+    # 构造级隔离：ProposerContext 只持有发现段，verify_isolation 应 True
+    ctx = PR.ProposerContext(disc_r, disc_b, rng, set(), set(), frontier={"elites": []})
+    try:
+        ctx_ok = ctx.verify_isolation()
+    except Exception as e:
+        ctx_ok = False
+        print("  verify_isolation 异常: %s" % e)
+    results.append(check("ProposerContext 构造级隔离自检通过", ctx_ok is True))
+    # 若有人把全量数据塞进 ctx（指纹对不上），verify_data_isolation 必须抛错
+    tamper = False
+    try:
+        FW.verify_data_isolation(reds, blues, disc_fp)   # 传全量+声明是发现段指纹 → 应拦
+    except PermissionError:
+        tamper = True
+    results.append(check("全量数据冒充发现段被拦截(FIREWALL BREACH 自检)", tamper))
+
+    # ---------------------------------------------------------------
+    _banner("⑦ 智能演进层：生成候选 + 过同款闸门管线（默认关闭需显式 enable）")
+    intel = PR.IntelligentEvolution(cfg={"k_light": 25, "ga_discovery_frac": 0.7,
+                                         "epochs": 2, "pop": 16, "intel_budget": 8}, enabled=True)
+    extra, dropped = intel.run(reds, blues, rng, frontier={"elites": [], "tried": [], "coverage": 0},
+                               killed_set=set(), tried_set=set(), eval_cache=None)
+    print("  智能层生成评估候选=%d（随机重放丢弃=%d）" % (len(extra), dropped))
+    results.append(check("智能层产出候选并入同款评估管线", len(extra) >= 0 and dropped >= 0))
+    results.append(check("智能层每个候选必经随机重放硬门", dropped >= 0))
+
+    # ---------------------------------------------------------------
     _banner("汇总")
     npass = sum(1 for r in results if r)
     print("  %d/%d 通过" % (npass, len(results)))

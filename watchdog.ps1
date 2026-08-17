@@ -4,6 +4,9 @@
 # Note: the cloud automation cannot read local files / Docker, so this local watchdog is the primary monitor.
 # Alive criterion: container Up + daemon.log updated within last 90 min
 #   (in data_driven mode it writes a line every ~60 min even when idle).
+# Crash-loop criterion: container Up + daemon.log active BUT cycle_id not advancing
+#   for >120 min => process loops but every cycle crashes before writing state
+#   (e.g. the old UnboundLocalError silent-crash bug). Restart to break the loop.
 
 $ErrorActionPreference = "Stop"
 $CI = [System.Globalization.CultureInfo]::InvariantCulture
@@ -14,6 +17,7 @@ $Log        = "$DataDir\watchdog.log"
 $DaemonLog  = "$DataDir\daemon.log"
 $StateFile  = "$DataDir\state.json"
 $CycleTrack = "$DataDir\watchdog_last_cycle.txt"
+$CycleTsFile = "$DataDir\watchdog_cycle_ts.txt"
 $Container  = "ssq-evo-engine"
 $AlertFile  = "$DataDir\watchdog_alert.log"
 
@@ -88,11 +92,36 @@ if (Test-Path $StateFile) {
                 $currentCycle = $st.cycle_id
                 if ($lastCycle -and ($lastCycle -ne $currentCycle)) {
                     Log ("cycle advanced: $lastCycle -> $currentCycle")
+                    Set-Content -Path $CycleTrack -Value $currentCycle -Encoding UTF8
+                    Set-Content -Path $CycleTsFile -Value (Stamp) -Encoding UTF8
                 }
                 elseif ($lastCycle -eq $currentCycle) {
-                    Log ("cycle unchanged ($currentCycle): possibly idle non-draw day, keep watching")
+                    # cycle not advancing: distinguish "normal idle" from "crash loop".
+                    # only flag crash loop when container Up AND daemon.log still active
+                    # (process is looping) but no progress for a long time.
+                    $stuckMin = 0
+                    if (Test-Path $CycleTsFile) {
+                        try {
+                            $ts = [datetime]::ParseExact(
+                                (Get-Content $CycleTsFile -Encoding UTF8 | Select-Object -First 1),
+                                "yyyy-MM-dd HH:mm:ss", $CI)
+                            $stuckMin = ((Get-Date) - $ts).TotalMinutes
+                        }
+                        catch { $stuckMin = 0 }
+                    }
+                    if (($status -match "Up") -and ($stuckMin -gt 120)) {
+                        $needRestart = $true
+                        $reasons += ("crash loop: container Up but cycle $currentCycle stuck "
+                                     + "{0:N0} min (every cycle crashes before state write)" -f $stuckMin)
+                    }
+                    else {
+                        Log ("cycle unchanged ($currentCycle) for {0:N0} min (keep watching)" -f $stuckMin)
+                    }
                 }
-                Set-Content -Path $CycleTrack -Value $currentCycle -Encoding UTF8
+            }
+            else {
+                Set-Content -Path $CycleTrack -Value $st.cycle_id -Encoding UTF8
+                Set-Content -Path $CycleTsFile -Value (Stamp) -Encoding UTF8
             }
         }
     }

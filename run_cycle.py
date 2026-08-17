@@ -27,6 +27,8 @@ import evaluator as EV
 import cache as C
 import positive_control as PC
 import firewall as FW
+import proposer as PR
+import scoring as SC
 
 MASTER = os.path.join(DATA_DIR, "ssq_master.csv")
 DB = os.path.join(DATA_DIR, "ssq_evo.db")
@@ -50,6 +52,10 @@ DEFAULT_CFG = {
     # 防火墙加固：GA 搜索只喂【发现段】，确认/实盘段物理隔离（杜绝搜索阶段看未来数据）。
     # 默认开启（真实加固）；设为 False 可回退到全量数据旧行为。
     "firewall_discovery_only": True, "ga_discovery_frac": 0.7, "ga_audit_topk": 8,
+    # 智能演进层（默认关闭：防火墙先焊死，再放智能模块进来）。
+    # 开启后，智能层生成的候选会并入【同款闸门管线】(BH-FDR+OOT+#41+随机对照)，
+    # 绝不旁路任何闸门；每个候选还需先过防火墙随机重放硬门。
+    "intelligent_evolution_enabled": False, "intel_budget": 30,
 }
 FDR_Q = 0.05          # 结构显著的 FDR 门槛（与看板一致）
 
@@ -443,6 +449,24 @@ def main():
     else:
         print("[cycle] 随机对照闸门: 无构造伪结构信号")
 
+    # 3.5 智能演进层（默认关闭；intelligent_evolution_enabled=True 时启用）。
+    # 智能层(假设生成器+多样性管理+元控制器)生成的候选会并入【同款闸门管线】
+    # (BH-FDR + OOT + #41 + 随机对照)，绝不旁路任何闸门；且每个候选在评估前
+    # 必须先过防火墙随机重放硬门(firewall_gate)。开启即代表"智能模块从防火墙内侧接入"。
+    if cfg.get("intelligent_evolution_enabled", False):
+        try:
+            intel = PR.IntelligentEvolution(cfg, enabled=True)
+            extra_evals, intel_dropped = intel.run(
+                reds, blues, rng, fr,
+                killed_set=(set(prone) if prone else set()),
+                tried_set=evo.tried, eval_cache=ec)
+            if extra_evals:
+                all_evals.extend(extra_evals)
+                print(f"[cycle] 智能演进层并入 {len(extra_evals)} 候选"
+                      f"(随机重放丢弃 {intel_dropped})入同款闸门管线")
+        except Exception as e:
+            print(f"[cycle] 智能演进层失败(不影响主流程): {e}")
+
     # 3. FDR (跨全部评估)
     pvals = np.array([e["p_raw"] for e in all_evals])
     qs = E.bh_fdr(pvals)
@@ -777,6 +801,12 @@ def main():
         # run 字典未装因果耦合/非平稳/零假设交叉主键/cycle_id(这些在 state 字典独立成门计算),
         # 从 state 补回, 否则看板对真实 cycle 的因果/非平稳两块会一直显示"—"。
         _digest_entry["cycle_id"] = rid
+        # live 排行榜：实盘战绩(预测 vs 随机基线)是唯一不可作弊的裁判；
+        # 历史回测只筛除不选拔，实盘命中率才是主选拔信号（见 scoring.py）。
+        try:
+            _digest_entry["live_ranking"] = SC.live_leaderboard(DATA_DIR)
+        except Exception as _le:
+            _digest_entry["live_ranking"] = {"error": str(_le)}
         for _k in ("causal_q_min", "causal_p_min", "causal_best_sig", "causal_best_test",
                    "ccm_rho_max", "granger_f_max",
                    "ns_n_sig_drift", "ns_n_sig_mom", "ns_best_drift_sig", "ns_best_drift_val",

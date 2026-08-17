@@ -173,6 +173,33 @@ def random_replay_check(sig, test, N, seed, k_sur=60):
 
 
 # ---------------------------------------------------------------------------
+# 防火墙硬门（构造级强制）：任何候选想进【待闸池】，唯一入口
+# ---------------------------------------------------------------------------
+def firewall_gate(genome, source, disc_fp, seed, N, k_sur=60):
+    """硬门：候选进入待闸池前必须先过 随机重放 + 审计留痕。
+    随机数据也 SURVIVOR → 判 ARTIFACT_BY_CONSTRUCTION，直接拒（不进入候选池）。
+    这是智能演进层每个候选的唯一入口；绕过此函数即视为越权。
+    返回 (passed, label)。"""
+    sig = genome.get("sig")
+    test = genome.get("test")
+    label, passed = random_replay_check(sig, test, N, seed=seed, k_sur=k_sur)
+    record_candidate(genome, source, disc_fp, seed,
+                     random_replay_label=label, random_replay_passed=passed)
+    return passed, label
+
+
+def verify_data_isolation(disc_r, disc_b, expected_fp):
+    """构造级断言：提案者所见发现段数据的指纹必须等于预期发现段指纹。
+    若有人把全量/确认段塞进来，指纹对不上 → 抛错。"""
+    actual = discovery_fingerprint(disc_r, disc_b)
+    if actual != expected_fp:
+        raise PermissionError(
+            "FIREWALL BREACH: 提案者数据指纹(%s) != 发现段指纹(%s)。"
+            "确认/实盘段不得进入提案者。" % (actual, expected_fp))
+    return True
+
+
+# ---------------------------------------------------------------------------
 # 晋级锁死：杜绝自主进化自动合并
 # ---------------------------------------------------------------------------
 def promote(genome, source, human_signoff, signoff_name="human"):
