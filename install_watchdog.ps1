@@ -11,11 +11,10 @@ if (-not (Test-Path $Script)) { Write-Error "watchdog.ps1 not found at $Script";
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$Script`""
 
-# triggers: 1) at logon 2) every 30 minutes (from registration, repeats indefinitely)
+# triggers: 1) at logon 2) every 30 minutes, repeating indefinitely (omit RepetitionDuration = run forever)
 $triggerLogon = New-ScheduledTaskTrigger -AtLogOn
 $triggerTimer = New-ScheduledTaskTrigger -Once -At (Get-Date) `
-    -RepetitionInterval (New-TimeSpan -Minutes 30) `
-    -RepetitionDuration ([TimeSpan]::MaxValue)
+    -RepetitionInterval (New-TimeSpan -Minutes 30)
 
 # settings: run on AC/battery, run if missed, do not require network, max 1h, ignore new on overlap
 $settings = New-ScheduledTaskSettingsSet `
@@ -32,7 +31,7 @@ Register-ScheduledTask -TaskName $TaskName -Action $action `
     -Principal $principal -Force
 
 Write-Host "OK: registered scheduled task '$TaskName'"
-Write-Host "  trigger: at logon + every 30 minutes"
+Write-Host "  trigger: at logon + every 30 minutes (indefinite)"
 Write-Host "  run as : $user (S4U, no stored password, can run while logged off)"
 Write-Host "  prereq : enable Docker Desktop 'Start at login', otherwise daemon is down after boot and up -d fails"
 Write-Host "  manage : Task Scheduler -> Task Scheduler Library -> $TaskName"
