@@ -243,24 +243,32 @@ def score(issue):
         print(f"[score] 主表仍未含 {issue}（可能尚未开奖或未 fetch 成功）。请开奖后重试。")
         return
     preds = load_preds()
-    p = next((x for x in preds if x["issue"] == issue), None)
-    if p is None:
+    # 同 issue 可能登记多种方法（朴素/公式驱动/...），逐条独立打分，互不污染
+    matched = [p for p in preds if p["issue"] == issue]
+    if not matched:
         print(f"[score] 未找到 {issue} 的预注册预测。无法打分（这本身就说明预测未在开奖前登记）。")
         return
-    ef = p["engine_forecast"]
-    bf = p["random_baseline"]
-    e_red = len(set(ef["reds"]) & set(actual["reds"]))
-    e_blue = 1 if ef["blue"] == actual["blue"] else 0
-    b_red = len(set(bf["reds"]) & set(actual["reds"]))
-    b_blue = 1 if bf["blue"] == actual["blue"] else 0
-    # 更新 scored 标记（不改原始预测/时间戳）
-    _mark_scored(issue, {"actual_reds": actual["reds"], "actual_blue": actual["blue"],
-                         "engine_red_hit": e_red, "engine_blue_hit": e_blue,
-                         "baseline_red_hit": b_red, "baseline_blue_hit": b_blue,
-                         "scored_ts": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
     print(f"[score] {issue} 实际开奖：红球 {actual['reds']}  蓝球 {actual['blue']}")
-    print(f"  引擎预测 {ef['reds']}+{ef['blue']}  => 红球命中 {e_red}/6，蓝球 {'中' if e_blue else '否'}")
-    print(f"  随机基线 {bf['reds']}+{bf['blue']}  => 红球命中 {b_red}/6，蓝球 {'中' if b_blue else '否'}")
+    for p in matched:
+        ef = p["engine_forecast"]
+        bf = p["random_baseline"]
+        e_red = len(set(ef["reds"]) & set(actual["reds"]))
+        e_blue = 1 if ef["blue"] == actual["blue"] else 0
+        b_red = len(set(bf["reds"]) & set(actual["reds"]))
+        b_blue = 1 if bf["blue"] == actual["blue"] else 0
+        # 逐条独立写回 result（不改原始预测/时间戳）
+        p["scored"] = True
+        p["result"] = {"actual_reds": actual["reds"], "actual_blue": actual["blue"],
+                       "engine_red_hit": e_red, "engine_blue_hit": e_blue,
+                       "baseline_red_hit": b_red, "baseline_blue_hit": b_blue,
+                       "scored_ts": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        print(f"  [{p['method']}] 引擎 {ef['reds']}+{ef['blue']} => 红 {e_red}/6 蓝{'中' if e_blue else '否'}；"
+              f"随机基线 {bf['reds']}+{bf['blue']} => 红 {b_red}/6 蓝{'中' if b_blue else '否'}")
+    # 整体写回（保留其它 issue 不变）
+    with open(PRED_FILE, "w", encoding="utf-8") as f:
+        for p in preds:
+            f.write(json.dumps(p, ensure_ascii=False) + "\n")
+    _summarize_scored()
 
 
 def _mark_scored(issue, result):
