@@ -283,15 +283,16 @@ def run_diff_formula_candidates(reds, blues, rng, cfg, seen_keys, all_evals):
       - 候选经 E.evaluate 在全量数据评估 p_raw 后，与演化/谱/因果候选一起进入
         同一个 BH-FDR 池，并随后接受 OOT 盲测 + 多零假设交叉 + #41 发现/确认分离闸门
         的 unified 裁决——绝不绕过任何诚信闸门（与演化候选完全相同的待遇）。
-    返回 (n_generated, n_added_to_pool)。disabled 时返回 (0, 0)。
+    返回 (n_generated, n_added_to_pool, recs)。disabled 时返回 (0, 0, [])。
+    recs 供 formula_viz 渲染可读公式 + 确认闸门状态，不额外计算。
     """
     if not cfg.get("diff_formula_enabled"):
-        return 0, 0
+        return 0, 0, []
     try:
         import diff_formula as DF
     except Exception as e:
         print(f"[cycle] #39 可微Formula 模块导入失败(跳过): {e}")
-        return 0, 0
+        return 0, 0, []
     try:
         rng_df = np.random.default_rng(int(cfg.get("seed", 20260813)) + len(reds) + 99)
         recs = DF.run_diff_search(
@@ -321,10 +322,48 @@ def run_diff_formula_candidates(reds, blues, rng, cfg, seen_keys, all_evals):
             added += 1
         print(f"[cycle] #39 可微Formula: 生成 {len(recs)} 候选, 入池 {added} "
               f"(经统一诚信闸门重判, 不绕过)")
-        return len(recs), added
+        return len(recs), added, recs
     except Exception as e:
         print(f"[cycle] #39 可微Formula 运行失败(不影响主流程): {e}")
-        return 0, 0
+        return 0, 0, []
+
+
+def _formula_language_field(df_recs, DATA_DIR):
+    """把 #39 可微Formula 候选渲染成可读 Formula 语言 + 确认闸门状态。
+
+    复用 run_diff_formula_candidates 已跑的 recs（不额外计算），产出：
+      - DATA_DIR/formula_language.json  （看板可消费）
+      - DATA_DIR/formula_language.html  （自包含可视化报告，可直接打开）
+      - 返回摘要 dict 进 daily_digest 载荷。
+    diff_formula 关闭或无候选时返回 None（看板块自动隐藏）。
+    """
+    if not df_recs:
+        return None
+    try:
+        import formula_viz as FV
+        recs = FV.build_records(df_recs)
+        ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        summary = {
+            "ts": ts,
+            "n_signal": sum(1 for r in recs if r["gate"] == "SIGNAL"),
+            "n_unconfirmed": sum(1 for r in recs if r["gate"] == "UNCONFIRMED"),
+            "n_null": sum(1 for r in recs if r["gate"] == "NULL"),
+            "top": [{"formula": r["formula"], "gate_zh": r["gate_zh"],
+                     "gate_color": r["gate_color"], "disc_p": r["disc_p"]}
+                    for r in recs[:8]],
+        }
+        # 写机器可读 + 可视化报告（看板/CloudStudio 可消费）
+        with open(os.path.join(DATA_DIR, "formula_language.json"), "w", encoding="utf-8") as f:
+            json.dump({"ts": ts, "recs": recs, "summary": summary},
+                      f, ensure_ascii=False, indent=2)
+        with open(os.path.join(DATA_DIR, "formula_language.html"), "w", encoding="utf-8") as f:
+            f.write(FV.to_html(recs, {"ts": ts}))
+        print(f"[cycle] Formula 语言可视化: {len(recs)} 候选 "
+              f"(SIGNAL={summary['n_signal']} UNCONFIRMED={summary['n_unconfirmed']} NULL={summary['n_null']})")
+        return summary
+    except Exception as e:
+        print(f"[cycle] Formula 语言可视化失败(不影响主流程): {e}")
+        return None
 
 
 def main():
@@ -424,7 +463,7 @@ def main():
     # 2c. #39 可微 Formula 候选（实验性，默认关闭）：发现段数值优化连续超参生成候选，
     #     冻结后并入统一诚信闸门池（BH-FDR + OOT + 交叉零假设 + #41 发现/确认分离闸门），
     #     与演化/谱/因果候选完全相同的待遇，绝不绕过任何闸门。
-    df_gen, df_added = run_diff_formula_candidates(reds, blues, rng, cfg, seen_keys, all_evals)
+    df_gen, df_added, df_recs = run_diff_formula_candidates(reds, blues, rng, cfg, seen_keys, all_evals)
     if df_gen:
         print(f"[cycle] #39 可微Formula: 生成 {df_gen}, 入池 {df_added}")
 
@@ -625,6 +664,7 @@ def main():
         "wf_n_folds": (wf["n_folds"] if wf else None),
         "df_enabled": bool(cfg.get("diff_formula_enabled")),
         "df_gen": df_gen, "df_added": df_added,
+        "formula_language": _formula_language_field(df_recs, DATA_DIR),
         "positive_control": pc,   # 持续阳性对照：闸门功率监控（None=本轮未跑）
         "alert": alert, "coverage": fr["coverage"],
         "artifact_prone_n": len(prone), "artifact_prone": sorted(prone)[:12],

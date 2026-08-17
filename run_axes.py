@@ -133,6 +133,7 @@ def run(reds, blues, seed=20260815, k_sur=40):
             lr["group"] = "formula(comp)"
             lr["note"] = "可微 Formula 进化候选（公式轴）"
             lr["disc_p"] = best["disc_p"]
+            lr["params"] = best["params"]  # 供 formula_viz 渲染可读公式
             # —— 随机数据对照闸门（公式轴同样须过；否则构造伪结构从公式轴漏过）——
             ctrl = random_control_label(best["sig"], [best["test"]], N, seed=seed, k_sur=60)
             if ctrl == "SURVIVOR":

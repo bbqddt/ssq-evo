@@ -1,87 +1,90 @@
-# 双色球结构搜索引擎 · 7×24 部署指南
+# ssq_evo · 快速部署
 
-## 这个系统在做什么（再说一次，避免误用）
+> **完整架构、模块地图、红线、操作手册 → 见 [ARCHITECTURE.md](./ARCHITECTURE.md)**
+>
+> 本文件仅保留"从零到跑起来"的最小步骤。
 
-它是一个**自适应连续结构搜索仪器**，不是预测器：
+## 一句话定位
 
-- 每期新开奖 = 对"序列无结构"零假设的一次新检验；样本越多，对"隐藏结构"的排除越硬。
-- 算子 = (信号映射 × 检验统计 × 参数) 在**演化搜索**中不断变异/重组，探索更广的假设空间
-  （你提的"能量/频率/振动"已落成 `vector_mag / vector_phase / complex_field / red_energy` 等映射）。
-- 每个算子都和 **AAFT surrogate**（保留频谱+分布、破坏时序）对比，再用 **BH 假发现率(FDR)**
-  跨全部候选校正，防止演化搜索本身挖出假规律。
-- 全量最优算子还要在**最近 20% 数据上样本外复现**，过不了就是过拟合，不报。
-- **唯一成功条件**：某算子经 FDR(q<0.01) 且样本外复现 → 触发看板警报。否则持续返回 null。
-- 持续 null 是科学结果（证据的缺席随测试增强），不构成对时间是否存在的形而上学证明，
-  也不赋予任何预测/下注权。
+双色球开奖序列的**结构搜索引擎**（不是预测器）。域大概率是 null——诚实结论就是"未发现可复现结构"，这本身有效。
 
-## 文件结构
+## 前提
 
-```
-ssq_evo/
-  engine_core.py   信号映射库 + 检验统计库 + surrogate + 演化 + FDR + 样本外验证
-  data.py          增量抓取(500彩票网) + 按期号合并
-  store.py         SQLite 持久化(runs / evals)
-  run_cycle.py     一轮编排：抓数→演化→FDR→OOS→写库+state.json
-  serve.py         7×24 看板(http.server, 无第三方依赖)
-  daemon_loop.py   常驻循环(配合 nssm)
-  config.json      参数(epochs/pop/surrogate 数/端口/周期)
-  ssq_master.csv   本地主表(自动生成)
-  ssq_evo.db       历史库(自动生成)
-  state.json       看板数据源(每轮生成)
-```
+- Python 3.13+ / numpy / scipy
+- Docker（可选，推荐用于 7×24 常驻）
+- 数据目录 `D:/ssq_evo_data`（代码在 `D:/ssq_evo`，绝不写 C 盘）
 
-## 依赖（一次性）
+## 快速启动
 
-```
+### 本机直接跑（单轮测试）
+
+```bash
+cd D:\ssq_evo
 python -m venv venv
 venv\Scripts\pip install numpy scipy
+venv\Scripts\python run_cycle.py          # 跑一轮
+venv\Scripts\python smoke_test.py         # 冒烟测试（应输出 SMOKE_OK）
+venv\Scripts\python formula_viz.py        # 公式可视化（产出 formula_language.html）
 ```
 
-## 部署到本机（7×24 持久化）
+### Docker 7×24 常驻（生产）
 
-> ⚠️ **磁盘约束**：按项目约定，运行数据/库应落在 **D 盘**，不要写 C 盘。
-> 把整个 `ssq_evo/` 目录复制到 `D:\ssq_evo\`，并在该目录放好 venv 与数据。
+```bash
+cd D:\ssq_evo
+docker compose up -d --build              # 重建镜像并启动
+# 数据卷自动挂载 D:/ssq_evo_data -> /app/data
+# daemon_loop 数据驱动调度：新开奖到达即评估
+docker compose logs -f --tail 20          # 看日志
+```
 
-### 方式 A：nssm 注册常驻服务（推荐，开机自启）
+### 看门狗（崩溃自愈）
 
-1. 下载 nssm，执行 `nssm install ssq-evo "D:\ssq_evo\venv\Scripts\python.exe"`
-2. 在 nssm 界面 Application 参数填：`D:\ssq_evo\daemon_loop.py`
-3. 工作目录：`D:\ssq_evo\`
-4. `nssm start ssq-evo`
-   - daemon_loop 会每 `schedule_hours`(默认6h) 跑一轮 run_cycle，断网自动跳过抓取。
-5. 看板：`python serve.py` 后访问 `http://localhost:8088`
-   （serve 也可单独用 nssm 再注册一个服务，或用 `nssm set ssq-evo AppParameters` 改为同时拉起——建议分开两个服务：ssq-evo-daemon 与 ssq-evo-web）
+```powershell
+# 以管理员运行：注册计划任务（登录时 + 每30min）
+.\install_watchdog.ps1
+# 检测：容器存活/log静止>90min/state过旧>48h/cycle卡>120min → 自动 docker compose up -d
+```
 
-### 方式 B：Windows 计划任务（更轻）
+### CloudStudio 看板
 
-1. 任务计划程序 → 创建任务 → 触发器"每隔 6 小时"。
-2. 操作：启动 `D:\ssq_evo\venv\Scripts\python.exe`，参数 `D:\ssq_evo\run_cycle.py`。
-3. 勾选"不管用户是否登录都要运行" + "最高权限"。
-4. 看板按需手动 `python serve.py`，或用计划任务在登录时拉起。
+```bash
+python make_dashboard.py                  # 读 daily_digest.jsonl 生成 dashboard/index.html
+# 手动把 D:/ssq_evo_data/dashboard/ 发布到 CloudStudio
+```
 
-## 调参（config.json）
+## 开奖日自动化
 
-| 键 | 含义 | 调大效果 |
-|---|---|---|
-| epochs | 演化代数 | 搜得更深，更慢 |
-| pop | 每代种群大小 | 假设空间更广，更慢 |
-| k_light / k_heavy | 轻/重检验的 surrogate 数 | 显著性估计更稳，更慢 |
-| alert_q / alert_oos_p | 警报阈值 | 调小更严格 |
-| schedule_hours | 自动周期 | 调小更新更频繁 |
-| http_port | 看板端口 | 避免冲突 |
+```bash
+python predict_tonight.py auto            # 注册候选（引擎公式驱动）→ 开奖后抓取校对 → 评分
+# 或通过 Automation（每开奖日 18:00 注册 / 22:30 校对）
+```
 
-若一轮耗时过长（>20min），优先降 `pop` 与 `k_heavy`，并重检验的 `sub` 子采样上限
-（在 engine_core.py 的 `t_rq_determinism / t_lyap_rosenstein / t_approx_entropy` 中）。
+## 核心文件速查
 
-## 怎样"修正、演进"你的方向
+| 文件 | 用途 |
+|------|------|
+| `run_cycle.py` | 一轮编排（多源候选→统一闸门→digest） |
+| `engine_core.py` | 演化引擎 + 信号库 + 检验统计 + surrogate |
+| `firewall.py` | 四道物理防火墙（数据隔离/指标隔离/审计/随机重放） |
+| `proposer.py` | 智能演进子系统（默认关，`intelligent_evolution_enabled`） |
+| `scoring.py` | 正确评分规则 + live 排行榜 |
+| `evaluator.py` (#41) | 发现/确认分离 walk-forward |
+| `run_axes.py` | 轴驱动器 + representation_zoo + layered_null |
+| `formula_viz.py` | 公式语言可视化（带确认闸门状态） |
+| `daemon_loop.py` | 7×24 常驻循环（数据驱动调度） |
+| `watchdog.ps1` | 崩溃循环检测 + 自愈 |
+| `ARCHITECTURE.md` | **完整文档**（架构图/红线/模块清单/科学结论） |
 
-- 想加新的"能量/频率/振动"映射：在 `engine_core.py` 的 `SIGMAPS` 里加一个函数即可，
-  演化会自动把它纳入候选空间。
-- 想加新的检验统计：在 `TESTS` 里加，标注 direction（'high'/'low'）与 tier（'light'/'heavy'）。
-- 想换更强的零假设对照：surrogate 默认 AAFT；可在 `evaluate()` 把 `sur_type` 切到 `"shuffle"`。
+## 诚实红线摘要
 
-## 诚实边界（写进代码，也写在这里）
+1. **禁止绕闸门**：所有候选源汇入同一 BH-FDR + #41 + 随机对照闸门
+2. **null 域不造假阳性**：无监督优化器不得以"过闸"为目标搜索
+3. **预测必须接引擎结论**：不得另起朴素频率计数器绕过引擎
+4. **改代码必重建镜像**：Dockerfile COPY 列表须同步新增 .py
+5. **看板产物不进 GitHub**：dashboard/ + daily_digest.jsonl 已 .gitignore
 
-本系统监控的是"序列中是否存在可检测结构"。它**不能**证明或反驳时间是否存在；
-即便某日触发警报，也只说明"此序列在该算子下有非随机结构"，不等于可预测下期、
-更不等于时间无存。任何下注/投资行为都属误用。
+## 当前科学结论
+
+- **真实数据：无经确认结构**（null 域）
+- **阳性对照：AR(1) 注入检出 SIGNAL**（闸门功率正常）
+- 结论：不是"没找出来"，而是"真的没有可复现结构"

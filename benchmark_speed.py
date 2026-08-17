@@ -7,7 +7,7 @@ import numpy as np
 import data as D
 import engine_core as E
 
-MASTER = os.environ.get("MASTER", "/data/ssq_master.csv")
+MASTER = os.environ.get("MASTER", "D:/ssq_evo_data/ssq_master.csv")
 master = D.load_master(MASTER)
 reds, blues, issues = D.to_arrays(master)
 N = len(reds)
