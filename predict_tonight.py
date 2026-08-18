@@ -229,14 +229,20 @@ def backtest(n_range=500, window=WINDOW, decay=DECAY, signal=None, n_random=200)
 
 # ---------------- 开奖后打分 ----------------
 def score(issue):
-    # 1) 先拉取最新开奖（确保含 issue）
+    # 1) 先拉取最新开奖并合并进主表（确保含 issue）
     try:
         sys.path.insert(0, HERE)
         import data as D
         fresh = D.fetch_recent()
-        print(f"[score] 已 fetch 最新数据，主表行数={len(fresh) if fresh else '?'}")
+        if fresh:
+            master = D.load_master(MASTER)
+            master, added = D.update_master(master, fresh)
+            D.save_master(master, MASTER)
+            print(f"[score] 已 fetch 并合并 {added} 期，主表行数={len(master)}")
+        else:
+            print("[score] fetch 返回空，尝试仅用本地主表。")
     except Exception as e:
-        print(f"[score] fetch 失败({e})，尝试仅用本地主表。")
+        print(f"[score] fetch/合并失败({e})，尝试仅用本地主表。")
     draws = load_draws()
     actual = next((d for d in draws if d["issue"] == issue), None)
     if actual is None:
@@ -330,11 +336,13 @@ def auto(phase="both", signal="red_gap_max", window=WINDOW, decay=DECAY):
                 print(f"[auto:register] 已为 {today}(开奖日) 预注册 {nxt}（公式驱动 {signal} + 随机基线）。")
 
     if phase in ("both", "score"):
-        pending = [p for p in load_preds() if not p.get("scored") and p["issue"] in known]
-        if not pending:
+        # 对所有'已登记未打分'的期调 score()；score() 内部先 fetch 最新开奖并合并进主表，
+        # 再判断该期是否已开奖。不依赖 auto() 开头加载的 known，避免刚开奖、主表尚未含该期时被漏掉。
+        undecided = [p for p in load_preds() if not p.get("scored")]
+        if not undecided:
             print(f"[auto:score] 无待打分条目。")
         else:
-            for p in pending:
+            for p in undecided:
                 score(p["issue"])
         _summarize_scored()
 
