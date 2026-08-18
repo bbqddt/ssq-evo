@@ -137,6 +137,18 @@ ssq_evo 是一个**双色球开奖序列的结构搜索引擎**，不是预测�
 5. **主动监管**：Automation `automation-1786853726747`（每6h）巡检容器存活/进程卡死/state 新鲜度/best_sig 是否被 artifact 污染/daemon 崩溃痕迹/摘要时效/数据接收/部署一致性。
 6. **改完必须验证 daemon 真跑完一轮**：state.json 的 cycle_id 递增 + updated 刷新 + daemon.log 无 Traceback（防静默崩溃）。
 
+### 5.1 交付验证闭环（2026-08-18 立项：防止"写了代码但容器跑旧码"反复发生）
+
+> **核心教训**：AI 多次 commit 后声明"完成"，但 Dockerfile 漏拷、镜像未重建、云端自动化碰不到 D 盘——全靠用户截图抓出。**不再靠自觉，靠脚本强制验证。**
+
+| 时机 | 必跑脚本 | 拦截什么 |
+|------|---------|---------|
+| **git commit 前** | `python pre_commit_check.py` | Dockerfile 漏拷 .py / 孤立未跟踪文件 / 容器版本落后 |
+| **docker build 后** | `python verify_deployment.py` | 容器内文件版本≠本地 / 新模块 import 失败 / daemon 有新 Traceback / state 不递增 |
+| **注册自动化前** | `python verify_automation_reachability.py` | 云端沙箱碰不到 D:\ 路径 → 自动化静默失败 |
+
+**铁律：不跑验证、不出示 PASS 报告，不得声明"完成"。**
+
 ---
 
 ## 6. 预测/选号产出红线
