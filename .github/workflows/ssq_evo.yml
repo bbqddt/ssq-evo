@@ -39,7 +39,10 @@ jobs:
 
   docker-build:
     # 抓 Dockerfile 漏拷 .py / 容器内 import 崩溃（历史反复出现：提交后容器跑旧码/缺模块）。
-    # ubuntu-latest runner 自带 docker；compose build 注入 GIT_SHA 供 verify 比对。
+    # 重要：必须用 docker build/run 直接操作，不能用 `docker compose run`——
+    # compose 文件挂载了 Windows 风格卷 D:/ssq_evo_data:/app/data，在 Linux runner 上
+    # 该路径无效会让 run 直接 exit 1（本地 Windows 却正常，这正是 #68 在 CI 红、本地绿的根因）。
+    # 双保险：Dockerfile 里也有 RUN 构建期冒烟测试，build 失败即代表漏拷/import 错误。
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -48,9 +51,8 @@ jobs:
       - name: Build image with GIT_SHA
         run: |
           GIT_SHA=$(git rev-parse HEAD)
-          docker compose build --build-arg GIT_SHA="$GIT_SHA"
+          docker build -t ssq-evo-ci --build-arg GIT_SHA="$GIT_SHA" .
 
       - name: Smoke import all modules (catches missing COPY)
         run: |
-          docker compose run --rm ssq-evo python -c \
-            "import engine_core,data,store,run_cycle,daemon_loop,frontier,make_dashboard,nonstationarity,evaluator,cache,diff_formula,positive_control,redteam_audit,representation_zoo,layered_null,run_axes,firewall,proposer,scoring,formula_viz,predict_tonight,ssq_health; print('IMPORT_OK')"
+          docker run --rm ssq-evo-ci python -c "import engine_core,data,store,run_cycle,daemon_loop,frontier,make_dashboard,nonstationarity,evaluator,cache,diff_formula,positive_control,redteam_audit,representation_zoo,layered_null,run_axes,firewall,proposer,scoring,formula_viz,predict_tonight,ssq_health; print('IMPORT_OK')"
