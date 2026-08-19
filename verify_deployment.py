@@ -15,6 +15,9 @@ PROJECT_DIR = r"D:\ssq_evo"
 DATA_DIR = r"D:\ssq_evo_data"
 CONTAINER_NAME = "ssq-evo-engine"
 
+# 单一真理源：所有实时状态读取走 docker exec，杜绝沙箱陈旧视图陷阱。
+import ssq_health as H
+
 # Files that MUST exist inside container (Dockerfile COPY targets)
 REQUIRED_CONTAINER_FILES = [
     "run_cycle.py",
@@ -137,23 +140,19 @@ def check_importable():
 def check_daemon_health():
     """5. daemon.log: no NEW tracebacks; state.json cycle fresh.
 
-    IMPORTANT: reads state.json / daemon.log via `docker exec` (live container
-    mount), NOT the bare DATA_DIR host path. The Bash tool sandbox keeps a stale
-    snapshot of D:/ssq_evo_data, so a bare-path read would show an old cycle_id
-    and falsely report "state stale / daemon dead". Going through the container
-    always sees the real, live file.
+    Reads state.json / daemon.log via `docker exec` (live container mount),
+    NOT the bare DATA_DIR host path (sandbox keeps a stale snapshot of
+    D:/ssq_evo_data -> would falsely report "state stale / daemon dead").
+    Delegates the live read to ssq_health (single source of truth).
     """
     issues = []
 
-    # Read via container (live mount) to dodge stale sandbox filesystem view.
+    # daemon.log via container (live mount)
     rc_log, log_txt, _ = run_cmd(
         ["docker", "exec", CONTAINER_NAME, "tail", "-n", "50", "/app/data/daemon.log"])
-    rc_state, state_txt, _ = run_cmd(
-        ["docker", "exec", CONTAINER_NAME, "cat", "/app/data/state.json"])
     rc_m, mtime_txt, _ = run_cmd(
         ["docker", "exec", CONTAINER_NAME, "stat", "-c", "%Y", "/app/data/state.json"])
 
-    # Traceback scan (container tail)
     if rc_log != 0 or not log_txt:
         issues.append("daemon.log unreadable via container")
     else:
@@ -161,29 +160,42 @@ def check_daemon_health():
         if tb > 0:
             issues.append(f"{tb} Traceback(s) in last 50 lines of daemon.log")
 
-    # State freshness (container stat + cat)
-    if rc_state != 0 or not state_txt:
+    d = H.get_live_state()
+    if d is None:
         issues.append("state.json unreadable via container")
     else:
-        try:
-            d = json.loads(state_txt)
-            cid = d.get("cycle_id", "?")
-            updated = d.get("updated", "?")
-            age_min = None
-            if rc_m == 0 and mtime_txt.strip().isdigit():
-                age_min = (time.time() - int(mtime_txt.strip())) / 60
-            if age_min is not None and age_min > 120:
-                issues.append(f"state.json stale: {age_min:.0f}min old (cycle={cid})")
-            else:
-                age_str = f"{age_min:.0f}min" if age_min is not None else "n/a"
-                issues.append(f"INFO: cycle_id={cid}, updated={updated}, age={age_str}")
-        except Exception as e:
-            issues.append(f"state.json parse error: {e}")
+        cid = d.get("cycle_id", "?")
+        updated = d.get("updated", "?")
+        age_min = None
+        if rc_m == 0 and mtime_txt.strip().isdigit():
+            age_min = (time.time() - int(mtime_txt.strip())) / 60
+        if age_min is not None and age_min > 120:
+            issues.append(f"state.json stale: {age_min:.0f}min old (cycle={cid})")
+        else:
+            age_str = f"{age_min:.0f}min" if age_min is not None else "n/a"
+            issues.append(f"INFO: cycle_id={cid}, updated={updated}, age={age_str}")
 
     fatal = [i for i in issues if not i.startswith("INFO")]
     if fatal:
         return False, "FAIL: " + "; ".join(fatal)
     return True, "PASS: " + "; ".join(issues)
+
+
+def check_build_sha():
+    """7. Container image SHA == local git HEAD.
+
+    Root-cause guard for 'code changed but container runs old version'.
+    Dockerfile writes the build-time GIT_SHA into /app/build_info.txt; this
+    check reads it via docker exec and compares against `git rev-parse HEAD`.
+    Mismatch => container is running a STALE image => must rebuild.
+    """
+    in_sync, detail = H.build_sha_in_sync()
+    if in_sync is True:
+        return True, f"PASS: {detail}"
+    if in_sync is False:
+        return False, f"FAIL: {detail} — run: GIT_SHA=$(git -C D:/ssq_evo rev-parse HEAD) docker compose up -d --build"
+    # None = unknown (image or git unavailable)
+    return True, f"WARN: {detail}"
 
 
 def check_dockerfile_completeness():
@@ -237,6 +249,7 @@ def main():
         ("Modules importable", check_importable),
         ("Daemon health", check_daemon_health),
         ("Dockerfile completeness", check_dockerfile_completeness),
+        ("Image SHA == git HEAD", check_build_sha),
     ]
 
     results = []

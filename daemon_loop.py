@@ -278,6 +278,18 @@ def main():
 
     _log(f"[daemon] 常驻启动 PID={os.getpid()} 模式={label} 锁={LOCK}")
 
+    # 打印镜像构建 SHA（Dockerfile 注入 build_info.txt），便于核对"容器是否跑最新代码"。
+    # 真正的旧码检测由 verify_deployment.check_build_sha() 比对 git HEAD 完成。
+    try:
+        binfo = os.path.join(HERE, "build_info.txt")
+        if os.path.exists(binfo):
+            _sha = open(binfo, encoding="utf-8").read().strip() or "unknown"
+            _log(f"[daemon] 镜像构建 SHA={_sha[:8]}  (verify 比对此值 vs git HEAD)")
+        else:
+            _log("[daemon] 镜像构建 SHA=未知 (build_info.txt 缺失)")
+    except Exception as e:
+        _log(f"[daemon] 读 build_info 失败(不影响主流程): {e}")
+
     # 启动时打印最近日报
     print_daily_summary()
 

@@ -5,7 +5,13 @@
 #      docker compose down     （停止）
 services:
   ssq-evo:
-    build: .
+    build:
+      context: .
+      # 注入 git SHA 进镜像（Dockerfile ARG GIT_SHA），用于"容器是否跑旧码"检测。
+      # 重建时必须带 SHA，否则 verify 会报 unknown：
+      #   GIT_SHA=$(git -C D:/ssq_evo rev-parse HEAD) docker compose up -d --build
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     container_name: ssq-evo-engine
     restart: unless-stopped
     ports:
