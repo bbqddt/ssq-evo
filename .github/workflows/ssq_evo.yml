@@ -36,3 +36,21 @@ jobs:
         env:
           DATA_DIR: ${{ github.workspace }}
         run: python -m pytest tests/ -q
+
+  docker-build:
+    # 抓 Dockerfile 漏拷 .py / 容器内 import 崩溃（历史反复出现：提交后容器跑旧码/缺模块）。
+    # ubuntu-latest runner 自带 docker；compose build 注入 GIT_SHA 供 verify 比对。
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image with GIT_SHA
+        run: |
+          GIT_SHA=$(git rev-parse HEAD)
+          docker compose build --build-arg GIT_SHA="$GIT_SHA"
+
+      - name: Smoke import all modules (catches missing COPY)
+        run: |
+          docker compose run --rm ssq-evo python -c \
+            "import engine_core,data,store,run_cycle,daemon_loop,frontier,make_dashboard,nonstationarity,evaluator,cache,diff_formula,positive_control,redteam_audit,representation_zoo,layered_null,run_axes,firewall,proposer,scoring,formula_viz,predict_tonight,ssq_health; print('IMPORT_OK')"
