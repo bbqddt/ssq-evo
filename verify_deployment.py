@@ -135,46 +135,48 @@ def check_importable():
 
 
 def check_daemon_health():
-    """5. daemon.log: no NEW tracebacks since last restart, state fresh."""
-    log_path = os.path.join(DATA_DIR, "daemon.log")
-    state_path = os.path.join(DATA_DIR, "state.json")
+    """5. daemon.log: no NEW tracebacks; state.json cycle fresh.
 
+    IMPORTANT: reads state.json / daemon.log via `docker exec` (live container
+    mount), NOT the bare DATA_DIR host path. The Bash tool sandbox keeps a stale
+    snapshot of D:/ssq_evo_data, so a bare-path read would show an old cycle_id
+    and falsely report "state stale / daemon dead". Going through the container
+    always sees the real, live file.
+    """
     issues = []
 
-    # Check daemon.log exists and is recent
-    if not os.path.exists(log_path):
-        issues.append("daemon.log MISSING")
+    # Read via container (live mount) to dodge stale sandbox filesystem view.
+    rc_log, log_txt, _ = run_cmd(
+        ["docker", "exec", CONTAINER_NAME, "tail", "-n", "50", "/app/data/daemon.log"])
+    rc_state, state_txt, _ = run_cmd(
+        ["docker", "exec", CONTAINER_NAME, "cat", "/app/data/state.json"])
+    rc_m, mtime_txt, _ = run_cmd(
+        ["docker", "exec", CONTAINER_NAME, "stat", "-c", "%Y", "/app/data/state.json"])
+
+    # Traceback scan (container tail)
+    if rc_log != 0 or not log_txt:
+        issues.append("daemon.log unreadable via container")
     else:
-        mtime = os.path.getmtime(log_path)
-        age_min = (time.time() - mtime) / 60
-        if age_min > 120:  # 2 hours
-            issues.append(f"daemon.log stale: {age_min:.0f}min old")
+        tb = sum(1 for l in log_txt.splitlines() if "Traceback" in l)
+        if tb > 0:
+            issues.append(f"{tb} Traceback(s) in last 50 lines of daemon.log")
 
-        # Check for recent Traceback (last 50 lines only - ignore historical)
-        try:
-            with open(log_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-            recent = lines[-50:] if len(lines) > 50 else lines
-            tb_count = sum(1 for l in recent if "Traceback" in l)
-            if tb_count > 0:
-                issues.append(f"{tb_count} Traceback(s) in last 50 lines of daemon.log")
-        except Exception as e:
-            issues.append(f"daemon.log read error: {e}")
-
-    # Check state.json
-    if not os.path.exists(state_path):
-        issues.append("state.json MISSING")
+    # State freshness (container stat + cat)
+    if rc_state != 0 or not state_txt:
+        issues.append("state.json unreadable via container")
     else:
         try:
-            st_mtime = os.path.getmtime(state_path)
-            state_age_min = (time.time() - st_mtime) / 60
-            d = json.load(open(state_path))
+            d = json.loads(state_txt)
             cid = d.get("cycle_id", "?")
             updated = d.get("updated", "?")
-            if state_age_min > 120:
-                issues.append(f"state.json stale: {state_age_min:.0f}min old (cycle={cid})")
+            age_min = None
+            if rc_m == 0 and mtime_txt.strip().isdigit():
+                age_min = (time.time() - int(mtime_txt.strip())) / 60
+            if age_min is not None and age_min > 120:
+                issues.append(f"state.json stale: {age_min:.0f}min old (cycle={cid})")
             else:
-                issues.append(f"INFO: cycle_id={cid}, updated={updated}, age={state_age_min:.0f}min")
+                age_str = f"{age_min:.0f}min" if age_min is not None else "n/a"
+                issues.append(f"INFO: cycle_id={cid}, updated={updated}, age={age_str}")
         except Exception as e:
             issues.append(f"state.json parse error: {e}")
 
