@@ -3,7 +3,7 @@
 tests/test_integration_diff_formula.py —— #39→#50 集成测试
 ====================================================
 验证可微 Formula 作为「额外候选源」正确接入 run_cycle 的统一诚信闸门池：
-  1) 默认关闭：run_diff_formula_candidates 返回 (0,0)，不向池中添加任何候选。
+  1) 默认关闭：run_diff_formula_candidates 返回 (0,0,[])，不向池中添加任何候选。
   2) 开启：候选被评估、打 diff_formula 标记、按 genome_key 去重后并入 all_evals。
   3) 诚实：真实(双色球 null)数据上，所有入池的可微候选经 #41 发现/确认分离闸门
      均不得出 SIGNAL（闸门拦截过拟合，与演化候选完全相同的待遇）。
@@ -34,8 +34,9 @@ def test_disabled_is_noop():
     cfg = {"diff_formula_enabled": False, "k_light": 20}
     seen = set()
     evals = []
-    g, a = RC.run_diff_formula_candidates(reds, blues, rng, cfg, seen, evals)
+    g, a, recs = RC.run_diff_formula_candidates(reds, blues, rng, cfg, seen, evals)
     assert (g, a) == (0, 0), "关闭时应为 (0,0)"
+    assert recs == [], "关闭时不应有公式记录"
     assert len(evals) == 0, "关闭时不应添加候选"
     print("  [整合1] 默认关闭 = no-op: PASS")
 
@@ -49,14 +50,15 @@ def test_enabled_adds_and_dedup():
            "seed": 20260813}
     seen = set()
     evals = []
-    g, a = RC.run_diff_formula_candidates(reds, blues, rng, cfg, seen, evals)
+    g, a, recs = RC.run_diff_formula_candidates(reds, blues, rng, cfg, seen, evals)
     assert g == 4, "应生成 4 个候选"
     assert a > 0, "应有候选入池"
+    assert len(recs) == 4, "应有 4 条公式记录"
     assert all(e.get("diff_formula") is True for e in evals), "入池候选应带 diff_formula 标记"
     # 去重：再次调用（同 seed）不应重复添加已见 genome_key
     seen2 = set(seen)
     evals2 = list(evals)
-    g2, a2 = RC.run_diff_formula_candidates(reds, blues, rng, cfg, seen2, evals2)
+    g2, a2, _ = RC.run_diff_formula_candidates(reds, blues, rng, cfg, seen2, evals2)
     assert a2 == 0, "已见 genome_key 不应重复入池"
     print(f"  [整合2] 开启: 生成 {g}, 首次入池 {a}, 二次去重入池 {a2}: PASS")
 
