@@ -12,6 +12,8 @@ C) 纪律：优化器确实只在发现段评估（确认段前缀从未传入�
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
@@ -19,6 +21,9 @@ import engine_core as E
 import evaluator as EV
 import diff_formula as DF
 import data as D
+
+
+_HAS_REAL_DATA = os.path.isfile("D:/ssq_evo_data/ssq_master.csv")
 
 
 def _real_data():
@@ -84,6 +89,7 @@ def test_efficacy_injected_structure():
     print("  [A] 功效 + 确认闸门: PASS")
 
 
+@pytest.mark.skipif(not _HAS_REAL_DATA, reason="requires ssq_master.csv (absent in CI)")
 def test_honesty_real_data_no_signal():
     """B/C) 真实数据：可微搜索不得产出 SIGNAL（闸门拦截过拟合）。"""
     reds, blues = _real_data()

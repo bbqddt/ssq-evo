@@ -15,6 +15,8 @@ import sys
 import time
 import tempfile
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
 
@@ -22,6 +24,8 @@ import numpy as np
 import engine_core as E
 import cache as C
 import data as D
+
+_HAS_REAL_DATA = os.path.isfile("D:/ssq_evo_data/ssq_master.csv")
 
 
 def _real_data():
@@ -76,6 +80,7 @@ def test_parallel_map_correct_and_fast():
         print("  [B] 单核环境跳过加速比对，结果一致: PASS")
 
 
+@pytest.mark.skipif(not _HAS_REAL_DATA, reason="requires ssq_master.csv (absent in CI)")
 def test_evolution_cache_does_not_change_results():
     """C) Evolution 加缓存 vs 无缓存，leaderboard 逐元素一致（统计结论不变）。"""
     reds, blues = _real_data()

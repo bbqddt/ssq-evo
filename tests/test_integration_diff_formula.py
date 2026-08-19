@@ -12,13 +12,14 @@ tests/test_integration_diff_formula.py —— #39→#50 集成测试
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import numpy as np
+import pytest
 import engine_core as E
 import evaluator as EV
 import run_cycle as RC
 import data as D
+
+_HAS_REAL_DATA = os.path.isfile("D:/ssq_evo_data/ssq_master.csv")
 
 
 def _real_data():
@@ -27,6 +28,7 @@ def _real_data():
     return reds, blues
 
 
+@pytest.mark.skipif(not _HAS_REAL_DATA, reason="requires ssq_master.csv (absent in CI)")
 def test_disabled_is_noop():
     """1) 默认关闭：不向池中加候选。"""
     reds, blues = _real_data()
@@ -41,6 +43,7 @@ def test_disabled_is_noop():
     print("  [整合1] 默认关闭 = no-op: PASS")
 
 
+@pytest.mark.skipif(not _HAS_REAL_DATA, reason="requires ssq_master.csv (absent in CI)")
 def test_enabled_adds_and_dedup():
     """2) 开启：候选入池、打标记、去重。"""
     reds, blues = _real_data()
@@ -63,6 +66,7 @@ def test_enabled_adds_and_dedup():
     print(f"  [整合2] 开启: 生成 {g}, 首次入池 {a}, 二次去重入池 {a2}: PASS")
 
 
+@pytest.mark.skipif(not _HAS_REAL_DATA, reason="requires ssq_master.csv (absent in CI)")
 def test_honesty_no_signal_on_real_data():
     """3) 真实 null 数据：入池可微候选不得骗过 #41 闸门产生 SIGNAL。"""
     reds, blues = _real_data()
