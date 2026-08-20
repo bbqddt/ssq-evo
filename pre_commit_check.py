@@ -10,6 +10,15 @@ import subprocess
 
 PROJECT_DIR = r"D:\ssq_evo"
 
+# 宿主/CI 专用脚本：本就不进容器，不应被「Dockerfile 必须 COPY 所有 .py」门禁拦截。
+# 这些脚本运行在 GitHub Actions runner 或宿主机，不属 Docker 镜像的一部分。
+HOST_ONLY_PY = {
+    "ci_evolve.py",          # 驾3 分布式 GA（CI runner 跑，吃静态快照）
+    "merge_candidates.py",   # workflow collect 合并 artifact
+    "ingest_candidates.py",  # 驾1 摄入候选（宿主机跑）
+    "data_refresh.py",       # 生成本地静态快照（宿主机跑）
+}
+
 
 def run_git(args):
     r = subprocess.run(["git"] + args, cwd=PROJECT_DIR,
@@ -33,7 +42,8 @@ def check_dockerfile_covers_all_py():
     copied = set(m.group(1).split())
     local_pys = set(f for f in os.listdir(PROJECT_DIR) if f.endswith(".py"))
 
-    missing = sorted(local_pys - copied)
+    # 宿主/CI 专用脚本不要求进容器 COPY
+    missing = sorted((local_pys - copied) - HOST_ONLY_PY)
     if missing:
         return (False,
                 f"Dockerfile COPY is missing {len(missing)} .py file(s): {missing}\n"

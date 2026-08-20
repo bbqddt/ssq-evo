@@ -1,11 +1,18 @@
-# GitHub Actions —— ssq_evo 测试门禁（仅此用途）
+# -*- coding: utf-8 -*-
+# GitHub Actions —— ssq_evo 测试门禁 + 驾3 分布式 GA（仅此两类用途）
 #
-# 重要架构决策（2026-08-15 重构）：
+# 架构决策（2026-08-15 重构 + 2026-08-20 扩展）：
 #   - 本地 Docker 引擎（daemon_loop + run_cycle）是**唯一**的结构搜索引擎与真相源；
-#     运行数据/状态落在 D:\ssq_evo_data（DATA_DIR 卷），已移出公开仓库(.gitignore)，
-#     不再由 CI 自动提交，避免：公开仓库塞增长型二进制 DB、与用户 push 撞车、双引擎状态分裂。
-#   - 因此本 workflow **不再跑 cycle、不再提交数据**，只做代码门禁：push/PR 时跑测试套件，
-#     防止坏代码合入 main。
+#     运行数据/状态落在 D:\ssq_evo_data（DATA_DIR 卷），已移出公开仓库(.gitignore)。
+#   - 因此本 workflow **不跑 cycle、不提交数据**，只做：
+#       1) 代码门禁（test + docker-build）—— 防止坏代码合入 main；
+#       2) 驾3 分布式 GA（evolve + collect）—— 把搜索广度/种子多样性外包到云端免费算力，
+#          只【提案】候选基因组，驾1 在真实数据上过统一闸门后才并入 frontier（防 Goodhart）。
+#
+# 关于「数据进仓库」的有意例外：
+#   - data/ssq_history.csv 是【静态历史快照】（公开开奖史，固定参考，非增长库），
+#     供 CI runner 载入做 GA；引擎状态仍在 D:\ssq_evo_data，不在仓库。
+#   - ga-candidates 分支只存 candidates.json（提案队列，tiny，非引擎状态），不造成状态分裂。
 name: SSQ Evo CI
 
 on:
@@ -13,6 +20,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # 每天 UTC 13:17 ≈ 北京 21:17，跑一次分布式进化（避开开奖校对高峰）
+    - cron: "17 13 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -56,3 +67,74 @@ jobs:
       - name: Smoke import all modules (catches missing COPY)
         run: |
           docker run --rm ssq-evo-ci python -c "import engine_core,data,store,run_cycle,daemon_loop,frontier,make_dashboard,nonstationarity,evaluator,cache,diff_formula,positive_control,redteam_audit,representation_zoo,layered_null,run_axes,firewall,proposer,scoring,formula_viz,predict_tonight,ssq_health; print('IMPORT_OK')"
+
+  evolve:
+    # 驾3 分布式 GA：各 runner 用不同 seed 独立进化，提案候选（不判定结论）。
+    # 只在 schedule / workflow_dispatch 时跑，避免每次 push 烧免费分钟。
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      matrix:
+        seed: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install --no-cache-dir numpy scipy
+
+      - name: Evolve (seed ${{ matrix.seed }})
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: python ci_evolve.py --seed ${{ matrix.seed }} --out candidates_seed_${{ matrix.seed }}.json
+
+      - name: Upload candidate artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cand-seed-${{ matrix.seed }}
+          path: candidates_seed_${{ matrix.seed }}.json
+          retention-days: 7
+
+  collect:
+    # 合并所有 seed 的候选为一个 candidates.json，推到 ga-candidates 分支（提案队列）。
+    # 单一写入者（非并行 push），避免分支冲突。驾1 用 git fetch 拉取摄入。
+    needs: evolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Download all candidate artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: _cands
+          pattern: cand-seed-*
+          merge-multiple: true
+
+      - name: Merge into candidates.json
+        run: python merge_candidates.py _cands candidates.json
+
+      - name: Push proposal to ga-candidates (orphan branch, only candidates.json)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "ssq-evo-bot"
+          git config user.email "bot@ssq-evo.local"
+          git checkout --orphan ga-candidates
+          git rm -r --cached . >/dev/null 2>&1 || true
+          git add candidates.json
+          git commit -m "proposal: distributed GA candidates $(date -u +%Y%m%dT%H%M%SZ)" || echo "no-change"
+          git push --force origin HEAD:ga-candidates
