@@ -111,8 +111,7 @@ if (Test-Path $StateFile) {
                     }
                     if (($status -match "Up") -and ($stuckMin -gt 120)) {
                         $needRestart = $true
-                        $reasons += ("crash loop: container Up but cycle $currentCycle stuck "
-                                     + "{0:N0} min (every cycle crashes before state write)" -f $stuckMin)
+                    $reasons += ("crash loop: container Up but cycle {0} stuck {1:N0} min (every cycle crashes before state write)" -f $currentCycle, $stuckMin)
                     }
                     else {
                         Log ("cycle unchanged ($currentCycle) for {0:N0} min (keep watching)" -f $stuckMin)

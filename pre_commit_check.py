@@ -23,7 +23,7 @@ def check_dockerfile_covers_all_py():
     if not os.path.exists(dockerfile):
         return False, "Dockerfile MISSING - cannot deploy without it"
 
-    with open(dockerfile) as f:
+    with open(dockerfile, encoding="utf-8-sig") as f:
         content = f.read()
 
     m = re.search(r"COPY\s+(.*?)\s+\./", content)
