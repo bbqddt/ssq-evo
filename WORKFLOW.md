@@ -125,16 +125,26 @@
 | compose run 在 CI 红 | Linux runner 挂 Windows 卷 exit1 | 卷路径平台相关 | 改用 docker build/run |
 | ci_evolve/merge 命名 | merge 读 0 文件 | 文件名前缀不一致 | 统一 `candidates_seed_*.json` |
 | data_driven 藏 engine.yaml | 改卷 config.json 调度不生效，daemon 仍 idle 空转 | 配置优先级：YAML(canonical) 盖过卷 config.json 的 schedule_hours | 2026-08-21 改 YAML `schedule_mode: timed` 根治 |
+| 驾3→驾1 断链空转 | 驾3 云端 GA 提案推 ga-candidates 分支，但驾1 daemon 从不 ingest → 云端算力白费 | `ingest_candidates.py` 写好却无调用方 | 2026-08-21 daemon 每轮 `run_ingest_subprocess` + 看门狗 fetch 候选到卷根治 |
+| Write 写沙箱 D 盘 ≠ 真卷 | `Write` 工具写的 D:\ 文件，容器内 `/app/data` 读不到 | 沙箱文件系统与真本机挂载视图分离 | 一律 `docker exec` 写卷内文件 |
 
 ---
 
 ## 9. 当前状态（2026-08-21 实测）
 
-- **main = `8ad83e2`**（调度从 data_driven 改为 timed 持续迭代；Dockerfile 补拷驾3 脚本；镜像 SHA 追溯修复）
+- **main = `f8e5c89`**（接通驾3→驾1 提案摄入链路，根治云端 GA 算力空转；看门狗定期 fetch ga-candidates 到卷；调度改 timed 持续迭代；Dockerfile 补拷驾3 脚本；镜像 SHA 追溯修复）
 - **调度已修复算力空转**：`configs/engine.yaml` `schedule_mode: data_driven` → `timed`（`schedule_hours=0.25` → 每 15min 跑一轮全量 GA）。此前 data_driven 让 daemon 两次开奖间只 60min 轮询空转，公式进化实际仅 ~3 次/周；改后 ~96 轮/日，真正 7×24 持续公式迭代（cycle 339 已在定时模式下跑通验证）。
-- **驾1**：cycle 339（updated 18:38:56），best_sig 仍处随机区间（red_mean q=0.3844 / red_low_count q=0.2244），**Walk-Forward NULL/UNCONFIRMED → 判 null**（无超越随机可提取结构）。诚实结论不变：仍 null 域。
-- **frontier**：elites=12，coverage 748（704→748，+44 来自持续迭代）。
-- **verify_deployment 7/7 PASS**（2026-08-21）：容器存活/文件齐全/版本匹配/模块可导入/daemon 健康/Dockerfile 完整/镜像 SHA(8ad83e28)==git HEAD。
+- **驾1**：cycle 344（verify 时），best_sig 仍处随机区间，**Walk-Forward NULL/UNCONFIRMED → 判 null**（无超越随机可提取结构）。诚实结论不变：仍 null 域。
+- **frontier**：elites=12，coverage 持续累积（持续迭代驱动）。
+- **verify_deployment 7/7 PASS**（2026-08-21）：容器存活/文件齐全/版本匹配/模块可导入/daemon 健康/Dockerfile 完整/镜像 SHA(f8e5c89)==git HEAD。
 - **端到端 GA 管线本地实测贯通**：3 seed → 24 候选 → 闸门 1 过 23 拒（`red_parity/multiscale_se` 被随机对照判 `artifact=True` 正确拦截）。
-- **三驾车全在岗**：容器 running + 看门狗 + CI（cron 北京 21:17）。
+- **三驾车全在岗**：容器 running + 看门狗（含 fetch 候选）+ CI（cron 北京 21:17）。
 - ⚠️ 持续迭代在 null 域只扩大搜索广度，**不制造信号**；切勿因 cycle 数变多而误判"发现结构"。
+
+### 9.1 三驾车 × 公式进化 配合（2026-08-21 接通驾3→驾1）
+- **驾1（本地 Docker 引擎）= 唯一真相源**：GA 公式进化 `engine_core.Evolution`（genome=sig+test+params），每 15min 跑一轮全量 cycle → 更新 frontier（精英记忆）+ best_sig。
+- **驾3（GitHub Actions 分布式 GA）= 计算提案**：evolve×6 seed 在静态快照上独立进化，collect 合并推 `ga-candidates` 分支。只【提案】不裁决。
+- **驾2（看门狗+看板）= 监控+搬运**：每 30min 巡检容器/日志/state 新鲜度，顺带 `curl -x` 拉 `ga-candidates` 的 candidates.json 到数据卷（网络在宿主机解决，避开容器内代理坑）。
+- **配合数据流（已接通，无空转）**：驾3 提案 → `ga-candidates` 分支 → 看门狗 fetch 到 `D:\ssq_evo_data\candidates.json` → 驾1 daemon 每轮 `run_ingest_subprocess` 调 `ingest_candidates.py --local` → 在 3493 期真实数据过统一闸门（BH-FDR+OOT+多零假设+随机对照）→ 仅 SURVIVOR 且非构造伪结构者并入 frontier，下一轮 GA 以之起种群。
+- **验证**：dry-run 确认读卷+过闸门（测试候选 red_mean/mean 被正确拒 label=NULL）；重启容器后 daemon.log 出现 `[ingest]` 行（无候选时安全"无候选可摄入"）。至此驾3 云端算力不再白费。
+- **剩余依赖（用户侧）**：驾3 提案需 `workflow_dispatch`（Actions 页 Run workflow）或等 cron 北京 21:17 触发；当前无候选时驾1 安全跳过。
