@@ -142,7 +142,28 @@ def run_cycle_subprocess(py):
         _log(f"[daemon] cycle 异常: {e}")
         rc = -1
     regen_dashboard(py)   # 每轮结束(无论成败)重建 CloudStudio 看板, 保证对外监控始终最新
+    run_ingest_subprocess(py)  # 摄入驾3云端提案(ga-candidates), 过统一闸门后并入 frontier
     return rc
+
+
+def run_ingest_subprocess(py):
+    """摄入驾3 云端提案（ga-candidates 分支的 candidates.json），过统一闸门后并入 frontier。
+    候选由看门狗(宿主)定期 fetch 到 DATA_DIR/candidates.json；容器只读本地文件，
+    避免容器内直接访问 GitHub 的网络/代理依赖。无候选/失败均不影响主流程。"""
+    try:
+        proc = subprocess.run(
+            [py, "-u", os.path.join(HERE, "ingest_candidates.py"), "--local",
+             os.path.join(DATA_DIR, "candidates.json")],
+            cwd=HERE, capture_output=True, text=True, timeout=120,
+        )
+        for line in (proc.stdout or "").splitlines():
+            _log("[ingest] " + line)
+        if proc.returncode not in (0, 2):  # 2=无真实数据(跳过)
+            _log(f"[daemon] 摄入驾3提案返回码={proc.returncode}")
+    except subprocess.TimeoutExpired:
+        _log("[daemon] 摄入驾3提案超时(120s), 跳过本轮")
+    except Exception as e:
+        _log(f"[daemon] 摄入驾3提案失败(不影响主流程): {e}")
 
 
 def regen_dashboard(py):

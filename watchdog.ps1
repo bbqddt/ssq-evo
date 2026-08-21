@@ -130,6 +130,22 @@ if (Test-Path $StateFile) {
     }
 }
 
+# --- 0.5) fetch 驾3 提案 (ga-candidates) 到数据卷，供驾1 摄入 ---
+try {
+    $candUrl = "https://raw.githubusercontent.com/bbqddt/ssq-evo/ga-candidates/candidates.json"
+    $resp = & "$env:SystemRoot\System32\curl.exe" -s -m 20 -x "http://127.0.0.1:10808/" $candUrl 2>$null
+    if ($resp -and $resp.Trim().StartsWith("{")) {
+        Set-Content -Path "$DataDir\candidates.json" -Value $resp -Encoding UTF8
+        Log ("fetched ga-candidates -> candidates.json (" + $resp.Length + " bytes)")
+    }
+    else {
+        Log "ga-candidates 暂无候选(分支/文件未生成)或拉取为空"
+    }
+}
+catch {
+    Log ("fetch candidates failed: " + $_.Exception.Message)
+}
+
 # --- action ---
 if ($needRestart) {
     $msg = "$(Stamp)  RESTART: " + ($reasons -join "; ")
