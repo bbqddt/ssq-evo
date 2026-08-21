@@ -47,14 +47,14 @@ engine:
     redteam_out: audit                 # 报告输出子目录（DATA_DIR 下）
 
   # 调度模式（daemon_loop.py 读取；控制引擎何时跑全量 cycle）
-  #   schedule_mode:
-  #     "data_driven" (推荐) — 无新数据时 idle_minutes 休眠，check_minutes 查一次；
-  #                            新数据到达立即触发全量评估+摘要。让引擎从"空转"变为"等开奖→响应"。
-  #     未设置               — 回退到旧逻辑(CYCLE_MINUTES / schedule_hours)。
-  #   idle_minutes:   无新数据时的休眠间隔(默认360=6h)
-  #   check_minutes:  休眠中多久检查一次新数据(默认60=1h)
+  #   schedule_mode 取值（daemon_loop 仅对 == "data_driven" 特殊处理，其它值一律回退定时/连续）：
+  #     "data_driven" — 无新数据时长假休眠，仅开奖日才跑 GA（已弃用：导致两次开奖间算力空转）。
+  #     其它/未设置   — 回退定时模式(CYCLE_MINUTES / schedule_hours)，持续迭代。
+  #   现状(2026-08-21)：改为定时迭代。schedule_hours=0.25 → 每 15min 跑一轮 GA，
+  #   真正 7×24 用公式迭代，不再 idle 等开奖（修复"算力空转"）。
+  #   如需最大算力：设 CYCLE_MINUTES=0（连续 60s 冷却）或把 schedule_hours 调更小。
   #   注意：schedule_mode 必须是顶层键（daemon 读 cfg.get("schedule_mode")），
   #   不要包在 schedule: 父键下，否则读不到会回退到 schedule_hours 兜底。
-  schedule_mode: data_driven
+  schedule_mode: timed
   idle_minutes: 360
   check_minutes: 60
