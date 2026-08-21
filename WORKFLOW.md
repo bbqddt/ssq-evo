@@ -38,7 +38,7 @@
   - `daily_digest.jsonl` — 每轮追加的完整结论载荷（看板数据源，最权威）
   - `daemon.log` / `watchdog.log` — 运行/监控日志
   - `predictions.jsonl` — 开奖日登记/校对记录
-- **调度**：`daemon_loop.py` 数据驱动（无新数据则 60min 复查）；每轮 `run_cycle` → `make_dashboard` 重建看板。
+- **调度**：由 `configs/engine.yaml` 的 `schedule_mode` 控制。**配置优先级陷阱**：YAML 是 canonical 源，会盖过卷内 `config.json` 的 `schedule_hours`（改卷 config.json 的调度不生效！）。**2026-08-21 起改为 `timed`（`schedule_hours=0.25` → 每 15min 跑一轮全量 GA），真正 7×24 持续公式迭代**；此前 `data_driven`（idle 360min/查 60min）导致两次开奖间算力空转（见 §8）。每轮 `run_cycle` → `make_dashboard` 重建看板。
 - **自启**：compose 配 `restart: unless-stopped`，**宿主重启会自动拉起**（已验证）。
 
 ---
@@ -76,7 +76,7 @@
    - Dockerfile COPY 列表覆盖根目录所有**生产** `.py`；
    - `HOST_ONLY_PY` 白名单放行宿主/CI 脚本（`ci_evolve.py`/`ingest_candidates.py`/`merge_candidates.py`/`data_refresh.py`/`verify_*.py`/`watchdog.ps1` 等），它们本就不进容器；
    - 容器版本一致性警告；无孤立未跟踪 `.py`；文件尾换行。
-2. **部署后 `verify_deployment.py`（6/6）**：容器存活 / 文件存在 / 版本匹配 / import / daemon 健康 / Dockerfile 完整性。
+2. **部署后 `verify_deployment.py`（7/7）**：容器存活 / 文件存在 / 版本匹配 / import / daemon 健康 / Dockerfile 完整性 / 镜像 SHA==git HEAD。
 3. **CI**：`test` + `docker-build`（Dockerfile 内 `RUN` 冒烟构建期拦截漏拷）。
 4. **读真卷一律 `docker exec`**：沙箱 Bash 对 `D:` 是**陈旧缓存**（state.json cycle 显示旧值），只有 `docker exec` 进 `/app/data` 或 Read 工具读真实卷可靠。
 
@@ -124,13 +124,17 @@
 | Dockerfile 漏拷 | 重建后容器 import 崩 | 新 .py 未进 COPY | `docker-build` job + Dockerfile RUN 冒烟 |
 | compose run 在 CI 红 | Linux runner 挂 Windows 卷 exit1 | 卷路径平台相关 | 改用 docker build/run |
 | ci_evolve/merge 命名 | merge 读 0 文件 | 文件名前缀不一致 | 统一 `candidates_seed_*.json` |
+| data_driven 藏 engine.yaml | 改卷 config.json 调度不生效，daemon 仍 idle 空转 | 配置优先级：YAML(canonical) 盖过卷 config.json 的 schedule_hours | 2026-08-21 改 YAML `schedule_mode: timed` 根治 |
 
 ---
 
-## 9. 当前状态（2026-08-20 实测）
+## 9. 当前状态（2026-08-21 实测）
 
-- **main = `5cbd46d`**（含驾3 分布式 GA 全量脚本 + 静态快照 + 门禁白名单）
-- **驾1**：cycle 337，best_sig=`vector_phase` q=0.05，**Walk-Forward UNCONFIRMED → 判 null**（无超越随机可提取结构）
-- **frontier**：elites=12，tried=629，coverage=629
-- **端到端 GA 管线本地实测贯通**：3 seed → 24 候选 → 闸门 1 过 23 拒（`red_parity/multiscale_se` 被随机对照判 `artifact=True` 正确拦截）
-- **三驾车全在岗**：容器 running + 3 计划任务就绪 + CI（#69 SUCCESS，驾3 GA 待今晚 21:17 cron 或手动 dispatch 首跑完整 evolve×6+collect）
+- **main = `8ad83e2`**（调度从 data_driven 改为 timed 持续迭代；Dockerfile 补拷驾3 脚本；镜像 SHA 追溯修复）
+- **调度已修复算力空转**：`configs/engine.yaml` `schedule_mode: data_driven` → `timed`（`schedule_hours=0.25` → 每 15min 跑一轮全量 GA）。此前 data_driven 让 daemon 两次开奖间只 60min 轮询空转，公式进化实际仅 ~3 次/周；改后 ~96 轮/日，真正 7×24 持续公式迭代（cycle 339 已在定时模式下跑通验证）。
+- **驾1**：cycle 339（updated 18:38:56），best_sig 仍处随机区间（red_mean q=0.3844 / red_low_count q=0.2244），**Walk-Forward NULL/UNCONFIRMED → 判 null**（无超越随机可提取结构）。诚实结论不变：仍 null 域。
+- **frontier**：elites=12，coverage 748（704→748，+44 来自持续迭代）。
+- **verify_deployment 7/7 PASS**（2026-08-21）：容器存活/文件齐全/版本匹配/模块可导入/daemon 健康/Dockerfile 完整/镜像 SHA(8ad83e28)==git HEAD。
+- **端到端 GA 管线本地实测贯通**：3 seed → 24 候选 → 闸门 1 过 23 拒（`red_parity/multiscale_se` 被随机对照判 `artifact=True` 正确拦截）。
+- **三驾车全在岗**：容器 running + 看门狗 + CI（cron 北京 21:17）。
+- ⚠️ 持续迭代在 null 域只扩大搜索广度，**不制造信号**；切勿因 cycle 数变多而误判"发现结构"。
