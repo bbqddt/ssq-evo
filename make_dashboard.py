@@ -158,6 +158,9 @@ def build(records):
                   if r.get("coverage") is not None]
     n_series = [(i, r.get("n_issues")) for i, r in enumerate(hist)
                 if r.get("n_issues") is not None]
+    # 公式代数 df_gen 轨迹：观察代际是否真实上长（研发进度，非域定性）
+    dfgen_series = [(i, int(r.get("df_gen"))) for i, r in enumerate(hist)
+                    if r.get("df_gen") is not None]
 
     q = float(latest.get("best_q", 1.0) or 1.0)
     oos_acc = latest.get("oos_acc")
@@ -425,6 +428,7 @@ def build(records):
     {kpi_card("ALERT", "触发" if alert else "未触发", f"门槛 q&lt;{ALERT_Q} & OOS p&lt;{OOS_P}", "#3ddc84" if alert else "#ff6b6b", ok=alert)}
     {kpi_card("前瞻样本", f"{n_issues} 期", f"最新 {_esc(last_issue)} · 本轮新增 {added}", "#a78bfa")}
     {kpi_card("选号准确率 (第一性原理)", f"{_num(pick_red_excess,2) if pick_red_excess is not None else '—'} 红 / {_num(pick_blue_excess,2) if pick_blue_excess is not None else '—'} 蓝", f"top候选选6+1 vs 超几何随机基线超额 · p={_num(pick_p,4) if pick_p is not None else '—'} · n={pick_n} · {'高于随机✓' if pick_above else '不优于随机蒙'} · 选号 {_esc(str(pick_red_pick) if pick_red_pick else '—')}/{_esc(str(pick_blue_pick) if pick_blue_pick else '—')}", "#5ad1c4", ok=pick_above)}
+    {kpi_card("公式代数 df_gen (代际演进)", str(latest.get("df_gen") if latest.get("df_gen") is not None else "—"), f"本轮新增组合 {latest.get('df_added') if latest.get('df_added') is not None else '—'} · 播种期=1(地板)；代际上长待首个 comp 精英过统一闸门", "#f4a261", ok=(isinstance(latest.get("df_gen"), int) and latest.get("df_gen", 0) >= 2))}
   </div>
 
   <div class="panel"><h2>当前结论（诚实判定）</h2>
@@ -441,6 +445,7 @@ def build(records):
     <div class="charts">
       <div>{svg_line(q_series, threshold=FDR_Q, color="#4ea1ff", title="best_q 历史 (FDR 阈值 0.05)")}</div>
       <div>{svg_line(cov_series, ymin=0, ymax=max([c for _,c in cov_series]+[1]), color="#3ddc84", title="coverage 累计")}</div>
+      <div>{svg_line(dfgen_series, ymin=0, ymax=max([g for _,g in dfgen_series]+[2]), color="#f4a261", title="公式代数 df_gen 轨迹 (代际演进)")}</div>
     </div>
   </div>
 

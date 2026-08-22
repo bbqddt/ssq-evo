@@ -9,7 +9,7 @@ RUN pip install --no-cache-dir numpy scipy && \
     mkdir /app
 
 WORKDIR /app
-COPY engine_core.py data.py store.py run_cycle.py serve.py daemon_loop.py frontier.py make_dashboard.py nonstationarity.py evaluator.py cache.py diff_formula.py positive_control.py redteam_audit.py representation_zoo.py layered_null.py run_axes.py firewall.py proposer.py scoring.py formula_viz.py predict_tonight.py config.json benchmark_speed.py smoke_test.py verify_firewall.py pre_commit_check.py verify_deployment.py verify_automation_reachability.py ssq_health.py ci_evolve.py data_refresh.py ingest_candidates.py merge_candidates.py learning_contract.py failure_absorber.py axis_proposer.py review_primitives.py bias_corrector.py formula_composer.py ./
+COPY engine_core.py data.py store.py run_cycle.py serve.py daemon_loop.py frontier.py make_dashboard.py nonstationarity.py evaluator.py cache.py diff_formula.py positive_control.py redteam_audit.py representation_zoo.py layered_null.py run_axes.py firewall.py proposer.py scoring.py formula_viz.py predict_tonight.py config.json benchmark_speed.py smoke_test.py verify_firewall.py pre_commit_check.py verify_deployment.py verify_automation_reachability.py ssq_health.py ci_evolve.py data_refresh.py ingest_candidates.py merge_candidates.py learning_contract.py failure_absorber.py axis_proposer.py review_primitives.py bias_corrector.py formula_composer.py verify_df_gen.py ./
 COPY configs ./configs
 
 # 构建期冒烟测试：任何漏拷的 .py 或 import 期错误 → build 直接失败。
