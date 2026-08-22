@@ -43,7 +43,7 @@ engine:
   # 绝不自动合并、不改代码。启用后每轮 cycle 末尾读 state.json 写 audit/report。
   # 注：叶子键带 redteam_ 前缀（loader 扁平化丢父级名，避免与其它段撞键）。
   redteam:
-    redteam_audit_enabled: false
+    redteam_audit_enabled: true
     redteam_out: audit                 # 报告输出子目录（DATA_DIR 下）
 
   # 调度模式（daemon_loop.py 读取；控制引擎何时跑全量 cycle）
