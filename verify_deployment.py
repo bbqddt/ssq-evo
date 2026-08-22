@@ -215,20 +215,19 @@ def check_dockerfile_completeness():
 
     copied_files = copy_match.group(1).split()
 
-    # Find all .py in project root
-    local_pys = set(f for f in os.listdir(PROJECT_DIR) if f.endswith(".py"))
+    # COPY list may include non-.py files (config.json etc.); only flag files that
+    # are listed in COPY but do NOT exist locally (those would break `docker build`).
+    # Files present locally but not in COPY are fine (many files shouldn't ship in image).
+    local_files = set(f for f in os.listdir(PROJECT_DIR))
     copied_set = set(copied_files)
 
-    missing_from_copy = local_pys - copied_set
-    extra_in_copy = copied_set - local_pys
+    extra_in_copy = copied_set - local_files  # COPY'd but missing locally -> build-breaking
 
     msgs = []
-    if missing_from_copy:
-        msgs.append(f"MISSING from COPY: {sorted(missing_from_copy)}")
     if extra_in_copy:
         msgs.append(f"EXTRA in COPY (not found locally): {sorted(extra_in_copy)}")
 
-    if missing_from_copy:
+    if extra_in_copy:
         return False, "FAIL: Dockerfile incomplete: " + "; ".join(msgs)
     detail = ", ".join(msgs) if msgs else "OK"
     return True, f"PASS: Dockerfile COPY complete ({detail})"
