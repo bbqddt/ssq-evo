@@ -16,6 +16,7 @@ if not DATA_DIR:
     _d = r"D:\ssq_evo_data"
     DATA_DIR = _d if os.path.isdir(_d) else HERE
 os.makedirs(DATA_DIR, exist_ok=True)
+DIGEST = os.path.join(DATA_DIR, "daily_digest.jsonl")
 sys.path.insert(0, HERE)
 
 import engine_core as E
@@ -703,6 +704,44 @@ def main():
               f"总{cs['hits']+cs['misses']}, 条目{cs['entries']})")
         ec.flush()
 
+    # 6b. 评估稳定性（研发诚实指标）：搜索前沿是否收敛？
+    #     取近 N 轮 best_q，算变异系数(cv)与分位跨度(iqr)。cv 大 / iqr 宽 = 前沿未收敛
+    #     （best_q 在 0.02↔0.37 间剧烈漂移即此例）。这是研发进度陈述，非域定性——
+    #     它量化"我们离稳定产出可确认公式还有多远"，杜绝把漂移伪装成稳定。
+    _stab = {"q_cv": None, "q_iqr": None, "q_recent": None, "n_window": 0}
+    try:
+        _hist_q = []
+        if os.path.exists(DIGEST):
+            with open(DIGEST) as _fh:
+                for _l in _fh:
+                    _l = _l.strip()
+                    if not _l:
+                        continue
+                    try:
+                        _d = json.loads(_l)
+                        _q = _d.get("best_q")
+                        if isinstance(_q, (int, float)) and _q is not None:
+                            _hist_q.append(float(_q))
+                    except Exception:
+                        pass
+        _win = _hist_q[-int(cfg.get("stability_window", 20)):]
+        if len(_win) >= 3:
+            _arr = np.array(_win)
+            _mean = _arr.mean()
+            _std = _arr.std()
+            _q25, _q75 = np.percentile(_arr, [25, 75])
+            _stab = {
+                "q_cv": round(float(_std / _mean), 4) if _mean > 0 else None,
+                "q_iqr": round(float(_q75 - _q25), 4),
+                "q_recent": round(float(_arr[-1]), 4),
+                "n_window": len(_win),
+            }
+            _cv_tag = "未收敛" if (_stab["q_cv"] or 0) > 0.5 else "较稳"
+            print(f"[cycle] 评估稳定性: 近{_stab['n_window']}轮 best_q cv={_stab['q_cv']} "
+                  f"iqr={_stab['q_iqr']} → 搜索前沿{_cv_tag}")
+    except Exception as e:
+        print(f"[cycle] 评估稳定性计算失败(不影响主流程): {e}")
+
     # 7. 持久化
     con = S.open_db(DB)
     pc = None  # 持续阳性对照结果占位；8.5 节在 state 写入之后重算（依赖 rid），此处先绑定避免 UnboundLocalError
@@ -742,6 +781,7 @@ def main():
         "df_gen": df_gen, "df_added": df_added,
         "formula_language": _formula_language_field(df_recs, DATA_DIR),
         "positive_control": pc,   # 持续阳性对照：闸门功率监控（None=本轮未跑）
+        "stability": _stab,       # 评估稳定性（研发诚实指标）：best_q 近 N 轮 cv/iqr
         "alert": alert, "coverage": fr["coverage"],
         "artifact_prone_n": len(prone), "artifact_prone": sorted(prone)[:12],
         "pick_red_hit": (pick["red_hit"] if pick else None),

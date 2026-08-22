@@ -1,4 +1,5 @@
 {
   "http_port": 8088,
-  "schedule_hours": 0.25
+  "schedule_hours": 0.25,
+  "stability_window": 20
 }

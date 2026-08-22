@@ -161,6 +161,9 @@ def build(records):
     # 公式代数 df_gen 轨迹：观察代际是否真实上长（研发进度，非域定性）
     dfgen_series = [(i, int(r.get("df_gen"))) for i, r in enumerate(hist)
                     if r.get("df_gen") is not None]
+    # 评估稳定性轨迹（研发诚实指标）：近 N 轮 best_q 变异系数
+    stab_series = [(i, (r.get("stability") or {}).get("q_cv")) for i, r in enumerate(hist)
+                   if (r.get("stability") or {}).get("q_cv") is not None]
 
     q = float(latest.get("best_q", 1.0) or 1.0)
     oos_acc = latest.get("oos_acc")
@@ -429,6 +432,7 @@ def build(records):
     {kpi_card("前瞻样本", f"{n_issues} 期", f"最新 {_esc(last_issue)} · 本轮新增 {added}", "#a78bfa")}
     {kpi_card("选号准确率 (第一性原理)", f"{_num(pick_red_excess,2) if pick_red_excess is not None else '—'} 红 / {_num(pick_blue_excess,2) if pick_blue_excess is not None else '—'} 蓝", f"top候选选6+1 vs 超几何随机基线超额 · p={_num(pick_p,4) if pick_p is not None else '—'} · n={pick_n} · {'高于随机✓' if pick_above else '不优于随机蒙'} · 选号 {_esc(str(pick_red_pick) if pick_red_pick else '—')}/{_esc(str(pick_blue_pick) if pick_blue_pick else '—')}", "#5ad1c4", ok=pick_above)}
     {kpi_card("公式代数 df_gen (代际演进)", str(latest.get("df_gen") if latest.get("df_gen") is not None else "—"), f"本轮新增组合 {latest.get('df_added') if latest.get('df_added') is not None else '—'} · 播种期=1(地板)；代际上长待首个 comp 精英过统一闸门", "#f4a261", ok=(isinstance(latest.get("df_gen"), int) and latest.get("df_gen", 0) >= 2))}
+    {kpi_card("评估稳定性 (研发诚实)", f"cv={_num(stab.get('q_cv'),3) if (stab:=latest.get('stability') or {}) and stab.get('q_cv') is not None else '—'}", f"近{stab.get('n_window','?')}轮 best_q 变异系数 · iqr={_num(stab.get('q_iqr'),3) if stab and stab.get('q_iqr') is not None else '—'} · cv>0.5=搜索前沿未收敛(研发进行中,非失败)", "#e76f51", ok=(stab and (stab.get('q_cv') or 9) <= 0.5))}
   </div>
 
   <div class="panel"><h2>当前结论（诚实判定）</h2>
@@ -446,6 +450,7 @@ def build(records):
       <div>{svg_line(q_series, threshold=FDR_Q, color="#4ea1ff", title="best_q 历史 (FDR 阈值 0.05)")}</div>
       <div>{svg_line(cov_series, ymin=0, ymax=max([c for _,c in cov_series]+[1]), color="#3ddc84", title="coverage 累计")}</div>
       <div>{svg_line(dfgen_series, ymin=0, ymax=max([g for _,g in dfgen_series]+[2]), color="#f4a261", title="公式代数 df_gen 轨迹 (代际演进)")}</div>
+      <div>{svg_line(stab_series, ymin=0, ymax=max([c for _,c in stab_series if c is not None]+[1]), color="#e76f51", title="评估稳定性 best_q 变异系数 (cv↓=前沿收敛)")}</div>
     </div>
   </div>
 
