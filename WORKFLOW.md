@@ -127,12 +127,14 @@
 | data_driven 藏 engine.yaml | 改卷 config.json 调度不生效，daemon 仍 idle 空转 | 配置优先级：YAML(canonical) 盖过卷 config.json 的 schedule_hours | 2026-08-21 改 YAML `schedule_mode: timed` 根治 |
 | 驾3→驾1 断链空转 | 驾3 云端 GA 提案推 ga-candidates 分支，但驾1 daemon 从不 ingest → 云端算力白费 | `ingest_candidates.py` 写好却无调用方 | 2026-08-21 daemon 每轮 `run_ingest_subprocess` + 看门狗 fetch 候选到卷根治 |
 | Write 写沙箱 D 盘 ≠ 真卷 | `Write` 工具写的 D:\ 文件，容器内 `/app/data` 读不到 | 沙箱文件系统与真本机挂载视图分离 | 一律 `docker exec` 写卷内文件 |
+| 看门狗 fetch 依赖本机代理 | ga-candidates 分支【有】候选，但卷里永远空、驾1 ingest 无货 → 驾3 云端算力白费（看似空转） | 看门狗 `curl -x 127.0.0.1:10808` 依赖用户级代理；代理宕/未起时拉取失败（curl exit=35 / 000） | 2026-08-22 经 git+openssl 后端代理手动桥接证明链路通；加「摄入成功消费即删」防重复摄入(`ffde0c3`)；**代理须常驻(建议作 Windows 服务)**，否则看门狗搬运链在代理宕窗口失效 |
 
 ---
 
 ## 9. 当前状态（2026-08-21 实测）
 
-- **main = `f8e5c89`**（接通驾3→驾1 提案摄入链路，根治云端 GA 算力空转；看门狗定期 fetch ga-candidates 到卷；调度改 timed 持续迭代；Dockerfile 补拷驾3 脚本；镜像 SHA 追溯修复）
+- **main = `ffde0c3`**（驾3 提案摄入成功后消费即删防重复白耗算力；接通驾3→驾1 链路；看门狗 fetch ga-candidates；调度 timed 持续迭代；Dockerfile 补拷驾3 脚本；镜像 SHA 追溯）
+- **8/22 三驾车空转核查（关键结论）**：驾1 ✅ 持续跑(cycle 350, 每轮调 ingest)；驾3 ✅ **未空转**——8/21 cron 已产 `ga-candidates` 分支 `candidates.json`（6 seed × 48 候选）；唯一空转点是**看门狗→卷搬运链**：看门狗 fetch 走本机代理 10808，代理宕时拉空，导致驾1 每轮 ingest「无候选可摄入」。手动经 git+openssl 代理桥接把 48 候选灌入卷后，驾1 在 cycle 349 **真实摄入：通过闸门=4 拒绝=44 新增精英=4**（frontier 12→16），端到端闭环验证通过。
 - **调度已修复算力空转**：`configs/engine.yaml` `schedule_mode: data_driven` → `timed`（`schedule_hours=0.25` → 每 15min 跑一轮全量 GA）。此前 data_driven 让 daemon 两次开奖间只 60min 轮询空转，公式进化实际仅 ~3 次/周；改后 ~96 轮/日，真正 7×24 持续公式迭代（cycle 339 已在定时模式下跑通验证）。
 - **驾1**：cycle 344（verify 时），best_sig 仍处随机区间，**Walk-Forward NULL/UNCONFIRMED → 判 null**（无超越随机可提取结构）。诚实结论不变：仍 null 域。
 - **frontier**：elites=12，coverage 持续累积（持续迭代驱动）。
@@ -148,3 +150,5 @@
 - **配合数据流（已接通，无空转）**：驾3 提案 → `ga-candidates` 分支 → 看门狗 fetch 到 `D:\ssq_evo_data\candidates.json` → 驾1 daemon 每轮 `run_ingest_subprocess` 调 `ingest_candidates.py --local` → 在 3493 期真实数据过统一闸门（BH-FDR+OOT+多零假设+随机对照）→ 仅 SURVIVOR 且非构造伪结构者并入 frontier，下一轮 GA 以之起种群。
 - **验证**：dry-run 确认读卷+过闸门（测试候选 red_mean/mean 被正确拒 label=NULL）；重启容器后 daemon.log 出现 `[ingest]` 行（无候选时安全"无候选可摄入"）。至此驾3 云端算力不再白费。
 - **剩余依赖（用户侧）**：驾3 提案需 `workflow_dispatch`（Actions 页 Run workflow）或等 cron 北京 21:17 触发；当前无候选时驾1 安全跳过。
+- **2026-08-22 实测修正**：驾3 8/21 cron **确实产出** 48 候选（git_sha a7338e0），并非空转；真问题在**看门狗搬运链依赖本机代理**(10808)——代理宕时卷内无候选、驾1 白等。已验证手动桥接后驾1 摄入 4 个过闸门候选并入 frontier(12→16)。耐久修复：① daemon 摄入成功后**消费即删** `candidates.json`（候选只处理一次，防每轮重复跑 48×40 surrogate，`ffde0c3`）；② 看门狗代理须常驻(建议 Windows 服务)，否则搬运链在代理宕窗口失效。
+- **诚实提醒**：4 个过闸门候选是在 48 个里按 shuffle p<0.05 单点判定（未跨 48 做 FDR 多重校正），约 2.4 个假阳性属随机预期；它们是「存活提案种子」而非「已确认结构」。最终裁决仍归 firewall + walk-forward #41 确认闸门。勿因 frontier 增多误判发现结构。
