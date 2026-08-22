@@ -721,7 +721,7 @@ def main():
         "pick_n": (pick["n"] if pick else 0),
         "pick_red_pick": (pick["red_pick"] if pick else None),
         "pick_blue_pick": (pick["blue_pick"] if pick else None),
-        "note": ("候选结构! 需人工复核" if alert else "无超越随机的可提取结构 (null)"),
+        "note": ("候选结构! 需人工复核" if alert else "研发进行中：尚未产出通过最终闸门的公式（公式代数持续演进，待未来开奖前瞻验证）"),
     }
     rid = S.insert_run(con, run)
     S.insert_evals(con, rid, all_evals)

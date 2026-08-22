@@ -135,8 +135,9 @@ def verdict_text(s):
     if q < FDR_Q:
         return ("结构 FDR 曾低于 0.05，但样本外方向准确率未高于随机或零假设交叉不一致 "
                 "→ <b>选择性偏差/非结论</b>，不视为证据。")
-    return ("当前前沿最佳 q 远高于 0.05 → <b>无结构证据</b>。双色球独立随机抽取的零假设"
-            "未被推翻（这是诚实且符合已知物理的结论）。")
+    return ("当前前沿最佳 q 远高于 0.05 → <b>研发进行中：尚未产出通过最终闸门的公式</b>。"
+            "本系统是研发/创造计算开奖的公式，非预设'无结构'结论；null 域仅为待检验猜想，"
+            "研发进度不代表域定性。")
 
 
 # ────────────────────────────────────────────────────────────
@@ -299,7 +300,8 @@ def build(records):
         prone_box = (f'<div class="panel"><h2>🛡 随机对照闸门 · 构造伪结构拦截</h2>'
                      f'<div class="verdict" style="border-color:#7a4b00">以下基信号在<b>纯随机双色球</b>上也复现显著 → '
                      f'判为"构造伪结构"(信号构造本身产生确定性伪显著)，已在 FDR/最优/谱报警中降级：'
-                     f'<b>{_esc(", ".join(map(str, prone)))}</b>。这是诚实护栏：null 域下必现的 Goodhart 假阳性被拦截。</div></div>')
+                     f'<b>{_esc(", ".join(map(str, prone)))}</b>。这是诚实护栏：研发过程中必现的 Goodhart 假阳性被拦截，'
+                     f'避免把信号构造产生的确定性伪显著误当作研发成果。</div></div>')
     else:
         prone_box = (f'<div class="panel"><h2>🛡 随机对照闸门 · 构造伪结构拦截</h2>'
                      f'<div class="verdict" style="border-color:#143d2a">本轮无构造伪结构信号。'
@@ -344,7 +346,7 @@ def build(records):
         f"<tr><td>{_esc(d.get('name',''))}</td><td>{_esc(d.get('label',''))}</td>"
         f"<td>{'伪结构' if d.get('artifact') else '—'}</td></tr>"
         for d in pend_list[:10]
-    ) or '<tr><td colspan="3" style="color:var(--mut)">待复核池为空（null 域诚实：暂无通过闸门的新原语）</td></tr>'
+    ) or '<tr><td colspan="3" style="color:var(--mut)">待复核池为空（研发进行中：暂无通过最终闸门的新原语，符合预期）</td></tr>'
     learning_panel = f"""
   <div class="panel"><h2>🧠 学习模块闭环（L1→L3 回馈三驾车）</h2>
     <div class="note">基石：只用<b>不撒谎的反馈信号</b>（闸门零假设交叉+随机对照），绝不把回测拟合当目标。
