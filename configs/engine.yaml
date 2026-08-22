@@ -46,6 +46,17 @@ engine:
     redteam_audit_enabled: true
     redteam_out: audit                 # 报告输出子目录（DATA_DIR 下）
 
+  # 智能演进层（启发式结构化搜索，默认关闭）：开启后每轮在防火墙内侧接入
+  # HypothesisGenerator(突变精英/组合信号/新家族探索/参数扫描) + MetaController
+  # (按 frontier 停滞度分配探索/利用预算) + DiversityManager(防近亲坍缩)。
+  # 生成的候选【先过防火墙随机重放硬门】，再并入同款 BH-FDR + OOT + #41 + 随机对照闸门，
+  # 绝不旁路。注意：这是启发式引导搜索，并非外部 LLM 语义智能；LLM 提案者(LLMProposer)
+  # 仍是未接端点的占位桩，本开关不激活它。
+  # 注：叶子键带 intelligent_ 前缀（loader 扁平化丢父级名）。
+  intelligent:
+    intelligent_evolution_enabled: true
+    intel_budget: 30                   # 每轮智能层并入闸门管的候选上限
+
   # 调度模式（daemon_loop.py 读取；控制引擎何时跑全量 cycle）
   #   schedule_mode 取值（daemon_loop 仅对 == "data_driven" 特殊处理，其它值一律回退定时/连续）：
   #     "data_driven" — 无新数据时长假休眠，仅开奖日才跑 GA（已弃用：导致两次开奖间算力空转）。
