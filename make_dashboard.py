@@ -175,6 +175,15 @@ def build(records):
     oot_above = bool(latest.get("oot_above"))
     oot_ok = (oot_above and q < FDR_Q)
 
+    # 选号准确率（第一性原理口径）：引擎 top 候选产出 6+1 组合 vs 超几何随机基线的超额命中
+    pick_red_excess = latest.get("pick_red_excess")
+    pick_blue_excess = latest.get("pick_blue_excess")
+    pick_p = latest.get("pick_p")
+    pick_above = bool(latest.get("pick_above"))
+    pick_n = latest.get("pick_n")
+    pick_red_pick = latest.get("pick_red_pick")
+    pick_blue_pick = latest.get("pick_blue_pick")
+
     spectral_q = latest.get("spectral_q")
     spectral_n = latest.get("spectral_n")
     spectral_rank = latest.get("spectral_q_rank")
@@ -413,6 +422,7 @@ def build(records):
     {kpi_card("零假设交叉一致", _yn(consistent), f"primary({_esc(cross_type)})={_num(cross_primary,4) if cross_primary is not None else '—'}", "#3ddc84" if consistent else "#ff6b6b", ok=consistent)}
     {kpi_card("ALERT", "触发" if alert else "未触发", f"门槛 q&lt;{ALERT_Q} & OOS p&lt;{OOS_P}", "#3ddc84" if alert else "#ff6b6b", ok=alert)}
     {kpi_card("前瞻样本", f"{n_issues} 期", f"最新 {_esc(last_issue)} · 本轮新增 {added}", "#a78bfa")}
+    {kpi_card("选号准确率 (第一性原理)", f"{_num(pick_red_excess,2) if pick_red_excess is not None else '—'} 红 / {_num(pick_blue_excess,2) if pick_blue_excess is not None else '—'} 蓝", f"top候选选6+1 vs 超几何随机基线超额 · p={_num(pick_p,4) if pick_p is not None else '—'} · n={pick_n} · {'高于随机✓' if pick_above else '不优于随机蒙'} · 选号 {_esc(str(pick_red_pick) if pick_red_pick else '—')}/{_esc(str(pick_blue_pick) if pick_blue_pick else '—')}", "#5ad1c4", ok=pick_above)}
   </div>
 
   <div class="panel"><h2>当前结论（诚实判定）</h2>

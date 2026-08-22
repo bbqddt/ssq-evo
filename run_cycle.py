@@ -591,6 +591,15 @@ def main():
     if lb_items:
         oot = E.out_of_time(top, reds, blues, rng, train_frac=0.85, k_sur=cfg["k_light"])
 
+    # 5d2. 选号准确率（第一性原理口径）：系统本体是"计算双色球开奖"，直接回答
+    # "引擎 top 候选产出的 6+1 组合，比闭眼随机蒙多命中几个球"。不碰方向/时间哲学/博彩。
+    pick = None
+    if lb_items:
+        try:
+            pick = E.pick_accuracy(top, reds, blues, rng, frac=cfg["oos_frac"], k_sur=cfg["k_light"])
+        except Exception as e:
+            print(f"[cycle] 选号准确率计算失败(不影响主流程): {e}")
+
     # 5e 前置：随机对照闸门作用于谱扫描——若最强谱组合来自构造伪结构信号，
     # 降级 spec 并抑制报警（避免如 red_recurrence_mean 的 N 惩罚尖峰被误报为谱信号）。
     if spec.get("best_sig") in prone:
@@ -701,6 +710,17 @@ def main():
         "positive_control": pc,   # 持续阳性对照：闸门功率监控（None=本轮未跑）
         "alert": alert, "coverage": fr["coverage"],
         "artifact_prone_n": len(prone), "artifact_prone": sorted(prone)[:12],
+        "pick_red_hit": (pick["red_hit"] if pick else None),
+        "pick_blue_hit": (pick["blue_hit"] if pick else None),
+        "pick_red_expect": (pick["red_expect"] if pick else None),
+        "pick_blue_expect": (pick["blue_expect"] if pick else None),
+        "pick_red_excess": (pick["red_excess"] if pick else None),
+        "pick_blue_excess": (pick["blue_excess"] if pick else None),
+        "pick_p": (pick["pick_p"] if pick else None),
+        "pick_above": bool(pick and pick["above_random"]),
+        "pick_n": (pick["n"] if pick else 0),
+        "pick_red_pick": (pick["red_pick"] if pick else None),
+        "pick_blue_pick": (pick["blue_pick"] if pick else None),
         "note": ("候选结构! 需人工复核" if alert else "无超越随机的可提取结构 (null)"),
     }
     rid = S.insert_run(con, run)
@@ -780,6 +800,10 @@ def main():
         "artifact_prone_n": len(prone), "artifact_prone": sorted(prone),
         "n_eval": len(all_evals), "n_unique": len(leaderboard),
         "coverage": fr["coverage"], "elite_count": len(fr["elites"]),
+        "pick_red_excess": (pick["red_excess"] if pick else None),
+        "pick_blue_excess": (pick["blue_excess"] if pick else None),
+        "pick_p": (pick["pick_p"] if pick else None),
+        "pick_above": bool(pick and pick["above_random"]),
         "best_z_history": z_hist,
         "params": cfg,
         "leaderboard": [

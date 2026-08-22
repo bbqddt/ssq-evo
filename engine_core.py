@@ -1939,6 +1939,148 @@ def out_of_time(ev, reds, blues, rng, train_frac=0.85, w=60, k_sur=40):
     }
 
 
+def _pick_balls(sig_x, reds, blues, cut, top_k=6, blue_k=1, rng=None):
+    """第一性原理选号：信号 x(t) 作「态筛选器」，不预测方向、不碰时间哲学。
+
+    原理（最朴素可证）：x(t) 是每期一个标量。以训练段 x 的中位数为阈值把每期分成
+    高态/低态两群，分别统计两群下 33 红球 / 16 蓝球的「条件出现频率」。
+    信号若真携带结构，则两态频率应有可区分偏移。球评分 = |高态频率 − 低态频率|，
+    选评分最高的 top_k 红球 + blue_k 蓝球。这把「信号」与「33 个球」用条件频率
+    直接连接，不臆造复杂映射，也不退化成朴素全局边际法（memory 红线：朴素边际法
+    有系统性低号偏倚，须用引擎信号作态筛选器）。
+
+    返回 (red_pick: ndarray[int], blue_pick: ndarray[int])，球号 1-based。"""
+    x = np.asarray(sig_x, float)
+    n = x.shape[0]
+    if cut >= n:
+        return np.array([], dtype=int), np.array([], dtype=int)
+    thr = float(np.median(x[:cut]))
+    high = x[:cut] >= thr
+    low = ~high
+    nh, nl = int(high.sum()), int(low.sum())
+    if nh < 10 or nl < 10:
+        return np.array([], dtype=int), np.array([], dtype=int)
+    # 条件频率（33 长向量 / 16 长向量）
+    reds_cut = reds[:cut]
+    blues_cut = blues[:cut]
+    freq_high_r = np.array([(reds_cut[high, :].flatten() == i).mean() for i in range(1, 34)], dtype=float)
+    freq_low_r = np.array([(reds_cut[low, :].flatten() == i).mean() for i in range(1, 34)], dtype=float)
+    freq_high_b = np.array([(blues_cut[high] == i).mean() for i in range(1, 17)], dtype=float)
+    freq_low_b = np.array([(blues_cut[low] == i).mean() for i in range(1, 17)], dtype=float)
+    red_score = np.abs(freq_high_r - freq_low_r)
+    blue_score = np.abs(freq_high_b - freq_low_b)
+    # 纯信号态偏移评分选号：不引入全局边际频率作 tie-break（那是朴素边际法低号偏倚的
+    # 根源，memory 红线已批）。平局用稳定随机破，避免系统性偏倚污染零假设。
+    red_order = np.lexsort((rng.random(33), red_score))[::-1][:top_k]
+    blue_order = np.lexsort((rng.random(16), blue_score))[::-1][:blue_k]
+    red_pick = np.sort(red_order + 1)          # 1-based 球号
+    blue_pick = np.sort(blue_order + 1)
+    return red_pick, blue_pick
+
+
+def _hit_count(red_pick, blue_pick, reds_os, blues_os):
+    """样本外段实际命中：红球命中数(集合交) + 蓝球命中(0/1)。返回 (red_hit, blue_hit)。"""
+    if red_pick.size == 0:
+        return 0, 0
+    red_set = set(int(v) for v in red_pick)
+    blue_set = set(int(v) for v in blue_pick)
+    rh = 0
+    for row in reds_os:
+        row_set = set(int(v) for v in row)
+        rh += len(row_set & red_set)
+    bh = sum(1 for v in blues_os if int(v) in blue_set)
+    return rh, bh
+
+
+def pick_accuracy(ev, reds, blues, rng, frac=0.2, k_sur=60):
+    """选号准确率（第一性原理口径）—— 系统本体是「计算双色球开奖」，此函数直接回答
+    "公式产出的 6+1 组合，比闭眼随机蒙多命中几个球"。
+
+    不碰方向预测、不碰时间序列伪影、不碰博彩/收益维度（系统为研究时间不存在而建，
+    非赌博工具）。仅做一件事：信号 → 选号 → 样本外实际命中 vs 超几何随机基线。
+
+    流程：
+    1. 构造信号序列 x（与结构检验同口径，含 reorder 处理）；
+    2. 训练段(cut 前)用 _pick_balls 选 6 红球 + 1 蓝球；
+    3. 样本外段(cut 后)算实际命中球数 red_hit / blue_hit；
+    4. 零假设：随机重排「每期球集合」(保留边际频率但破坏与信号的对应)，对每套替代
+       数据跑同样选号+命中，得命中零分布；真实命中在其中的百分位 = pick_p。
+    5. 超几何基线期望：红球期望 = 6×(6/33)≈1.09，蓝球 = 1/16≈0.0625。
+       hit_excess = 真实命中数 − 零分布均值（相对随机基线的超额）。
+
+    返回 dict: {red_hit, blue_hit, red_expect, blue_expect, red_excess, blue_excess,
+                pick_p, above_random, k_sur, n, red_pick, blue_pick} 或 None(数据不足)。"""
+    if len(reds) < 80:
+        return None
+    reorder = (ev.get("params") or {}).get("_reorder", "identity")
+    if reorder and reorder != "identity":
+        reds, blues = apply_reorder(reds, blues, reorder, rng)
+    sig = ev["sig"]
+    try:
+        x = _build_x(sig, reds, blues, ev.get("params"))
+    except Exception:
+        return None
+    if x is None or x.shape[0] < 80:
+        return None
+    n = x.shape[0]
+    cut = int(n * (1 - frac))
+    if cut < 40 or (n - cut) < 30:
+        return None
+    red_pick, blue_pick = _pick_balls(x, reds, blues, cut, rng=rng)
+    if red_pick.size == 0:
+        return None
+    reds_os = reds[cut:]
+    blues_os = blues[cut:]
+    # 去重期数（同组合只算一次，避免重复开奖膨胀命中）
+    uniq_mask = np.ones(reds_os.shape[0], dtype=bool)
+    seen = set()
+    for i in range(reds_os.shape[0]):
+        key = (tuple(int(v) for v in reds_os[i]), int(blues_os[i]))
+        if key in seen:
+            uniq_mask[i] = False
+        else:
+            seen.add(key)
+    reds_os_u = reds_os[uniq_mask]
+    blues_os_u = blues_os[uniq_mask]
+    red_hit, blue_hit = _hit_count(red_pick, blue_pick, reds_os_u, blues_os_u)
+    # 零假设：重排球与信号的对应（每期红球集合随机置换到另一期），保留边际频率
+    red_expect = 6.0 * (6.0 / 33.0) * reds_os_u.shape[0]   # 总期望命中数(跨样本外期)
+    blue_expect = 1.0 * (1.0 / 16.0) * blues_os_u.shape[0]
+    hit_sur = []
+    for _ in range(int(k_sur)):
+        ridx = rng.permutation(reds_os_u.shape[0])
+        r_os_sh = reds_os_u[ridx]
+        bidx = rng.permutation(blues_os_u.shape[0])
+        b_os_sh = blues_os_u[bidx]
+        # 替代下仍用同一信号 x 与同一 cut（零假设=球与信号无关，仅破坏对应）
+        rp, bp = _pick_balls(x, reds, blues, cut, rng=rng)
+        if rp.size == 0:
+            continue
+        rh, bh = _hit_count(rp, bp, r_os_sh, b_os_sh)
+        hit_sur.append(rh + bh)
+    hit_sur = np.array(hit_sur) if hit_sur else np.empty(0)
+    if hit_sur.size == 0:
+        return None
+    total_hit = red_hit + blue_hit
+    total_expect = red_expect + blue_expect
+    p_random = float((hit_sur >= total_hit).mean() + 0.5 / hit_sur.size)
+    p_random = min(1.0, max(0.0, p_random))
+    return {
+        "red_hit": int(red_hit),
+        "blue_hit": int(blue_hit),
+        "red_expect": round(float(red_expect), 3),
+        "blue_expect": round(float(blue_expect), 3),
+        "red_excess": round(float(red_hit - red_expect), 3),
+        "blue_excess": round(float(blue_hit - blue_expect), 3),
+        "pick_p": round(p_random, 4),
+        "above_random": bool(p_random <= 0.05),
+        "k_sur": int(hit_sur.size),
+        "n": int(reds_os_u.shape[0]),
+        "red_pick": [int(v) for v in red_pick],
+        "blue_pick": [int(v) for v in blue_pick],
+    }
+
+
 def cross_validate_null(top, reds, blues, rng, frac=0.2, k_sur=25):
     """多零假设交叉验证：在「该检验的正确零假设(primary: 确定性类=shuffle, 其余=aaft)」
     与 AAFT、IAAFT、**TWIN** 四套零假设下分别重算结构 p 值。
