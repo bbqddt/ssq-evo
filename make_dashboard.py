@@ -307,6 +307,55 @@ def build(records):
     embed = json.dumps({"latest_cycle": latest.get("cycle_id"),
                         "latest_ts": latest.get("ts")}, ensure_ascii=False)
 
+    # 学习模块闭环面板数据（直接读数据卷结构化 JSON，契约基石二：来自三驾车真实产出）
+    def _load_j(p):
+        fp = os.path.join(DATA, p)
+        if not os.path.exists(fp):
+            return None
+        try:
+            with open(fp, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    ftax = _load_j("failure_taxonomy.json") or {}
+    bc = _load_j("bias_corrector.json") or {}
+    pend = _load_j("pending_primitives.json") or {"pending": []}
+    ftax_labels = ftax.get("labels", {})
+    ftax_rows = "".join(
+        f"<tr><td>{_esc(k)}</td><td>{v.get('count',0)}</td><td>{v.get('last_seen_cycle','—')}</td></tr>"
+        for k, v in sorted(ftax_labels.items(), key=lambda kv: -kv[1].get("count", 0))
+    ) or '<tr><td colspan="3" style="color:var(--mut)">暂无失败记录</td></tr>'
+    debunk = bc.get("debunked_tests", []) + bc.get("debunked_sigs", [])
+    novelty = bc.get("novelty_tilt", {})
+    novelty_rows = "".join(
+        f"<tr><td>{_esc(k)}</td><td>{_num(v,3)}</td></tr>" for k, v in list(novelty.items())[:8]
+    ) or '<tr><td colspan="2" style="color:var(--mut)">暂无倾斜</td></tr>'
+    pend_list = pend.get("pending", []) if isinstance(pend, dict) else []
+    pend_rows = "".join(
+        f"<tr><td>{_esc(d.get('name',''))}</td><td>{_esc(d.get('label',''))}</td>"
+        f"<td>{'伪结构' if d.get('artifact') else '—'}</td></tr>"
+        for d in pend_list[:10]
+    ) or '<tr><td colspan="3" style="color:var(--mut)">待复核池为空（null 域诚实：暂无通过闸门的新原语）</td></tr>'
+    learning_panel = f"""
+  <div class="panel"><h2>🧠 学习模块闭环（L1→L3 回馈三驾车）</h2>
+    <div class="note">基石：只用<b>不撒谎的反馈信号</b>（闸门零假设交叉+随机对照），绝不把回测拟合当目标。
+      输入来自三驾车真实产出，产出回馈三驾车——闭环每轮由 daemon 串接。</div>
+    <div class="grid2">
+      <div><h3>L1 失败吸收 · failure_taxonomy</h3>
+        <table><tr><th>失败类型</th><th>次数</th><th>末见 cycle</th></tr>{ftax_rows}</table></div>
+      <div><h3>L3 偏置纠正 · 已证伪/倾斜</h3>
+        <table>
+          <tr><th>已证伪路线</th><td>{_esc(', '.join(debunk) if debunk else '（无）')}</td></tr>
+          <tr><th>高新颖度倾斜</th><td><table style="margin:0">{novelty_rows}</table></td></tr>
+          <tr><th>更新 cycle</th><td>{bc.get('updated_cycle','—')}</td></tr>
+        </table></div>
+      <div><h3>L4 人类复核 · 待复核池</h3>
+        <table><tr><th>提议原语</th><th>discovery 标签</th><th>随机对照</th></tr>{pend_rows}</table>
+        <div class="note">仅经你复核确认的原语才 merge 进 SIGMAPS（基石四：人类否决权）。</div></div>
+    </div>
+  </div>
+"""
+
     html_doc = f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -325,6 +374,9 @@ def build(records):
   .kpi-val {{ font-size:26px; font-weight:700; margin:4px 0 2px; }}
   .kpi-sub {{ font-size:12px; color:var(--mut); }}
   .badge {{ font-size:11px; padding:1px 6px; border-radius:6px; margin-left:6px; }}
+  .grid2 {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px; }}
+  .grid2 h3 {{ font-size:14px; margin:0 0 6px; color:var(--fg); }}
+  .grid2 table {{ width:100%; }}
   .badge.ok {{ background:#143d2a; color:#3ddc84; }}
   .badge.no {{ background:#3d1717; color:#ff6b6b; }}
   .panel {{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:16px; }}
@@ -401,6 +453,8 @@ def build(records):
     <div class="note">首个 q&lt;0.05 出现时刻：{_esc(first_sig_ts or '—')}；自该时刻新开奖累计：{added} 期；
       最新已抓期号：{_esc(last_issue)}。若 added 长期为 0，说明官方尚未开新奖或抓取失败——前瞻验证须等真实新数据。</div>
   </div>
+
+  {learning_panel}
 
   <div class="panel"><h2>历史轮次（最近 12 轮）</h2>
     <table>
