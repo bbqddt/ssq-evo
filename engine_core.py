@@ -1552,7 +1552,8 @@ class Evolution:
     (4) 多进程并行评估(按基因组)，把 8 核全用上。"""
 
     def __init__(self, reds, blues, rng, k_light=25, k_heavy=10, epochs=6, pop=24,
-                 elites=None, frontier=None, sur_type="aaft", n_workers=0, eval_cache=None):
+                 elites=None, frontier=None, sur_type="aaft", n_workers=0, eval_cache=None,
+                 elite_bias=None):
         self.reds = reds
         self.blues = blues
         self.rng = rng
@@ -1562,6 +1563,8 @@ class Evolution:
         self.pop = pop
         self.elites = [dict(g) for g in (elites or [])]
         self.frontier = frontier or {"tried": []}
+        # 学习模块 L3 回馈：{sig: retain_multiplier} 已证伪 sig 降精英保留概率（默认 1.0 不变）
+        self.elite_bias = elite_bias or {}
         self.all_evals = []                          # 本论全部评估（喂 FDR）
         self.leaderboard = {}                        # gkey -> 该基因组最优 eval
         self.tried = set(self.frontier.get("tried", []))
@@ -1577,6 +1580,11 @@ class Evolution:
         pop = []
         n_elite = min(len(self.elites), max(2, self.pop // 3))
         for g in self.elites[:n_elite]:
+            sig = g.get("sig")
+            mult = self.elite_bias.get(sig, 1.0) if sig else 1.0
+            # L3 偏置纠正：已证伪 sig 的精英保留概率按乘子下降（mult<1 时按概率丢弃）
+            if mult < 1.0 and self.rng.random() > mult:
+                continue  # 该精英本轮不 seed（把算力让给未证伪方向）
             pop.append(dict(g))
         while len(pop) < self.pop:
             pop.append(random_genome(self.rng))

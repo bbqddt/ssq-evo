@@ -143,7 +143,50 @@ def run_cycle_subprocess(py):
         rc = -1
     regen_dashboard(py)   # 每轮结束(无论成败)重建 CloudStudio 看板, 保证对外监控始终最新
     run_ingest_subprocess(py)  # 摄入驾3云端提案(ga-candidates), 过统一闸门后并入 frontier
+    run_failure_absorber_subprocess(py)  # L1 失败吸收器: 吃驾1 state+驾3 fate, 落 avoidance_prior 回馈三驾车
+    run_bias_corrector_subprocess(py)  # L3 偏置纠正器: 读 L1 产物+驾3 fate, 落 bias_corrector.json 回馈三驾车
     return rc
+
+
+def run_failure_absorber_subprocess(py):
+    """L1 失败吸收器（学习模块）：每轮 cycle 后跑。
+    输入=驾1 闸门 state.json + 驾3 提案过闸 fate(ingest_fate.jsonl)；产出=avoidance_prior.json，
+    供 run_cycle / ci_evolve 生成候选时降权已知死胡同（契约基石二：学习回馈三驾车）。
+    容错：失败不影响主流程（下一轮重试）。"""
+    try:
+        proc = subprocess.run(
+            [py, "-u", os.path.join(HERE, "failure_absorber.py"), "--from-state"],
+            cwd=HERE, capture_output=True, text=True, timeout=120,
+        )
+        for line in (proc.stdout or "").splitlines():
+            _log("[L1] " + line)
+        if proc.returncode != 0:
+            _log(f"[daemon] L1 失败吸收器返回码={proc.returncode}")
+    except subprocess.TimeoutExpired:
+        _log("[daemon] L1 失败吸收器超时(120s), 跳过本轮")
+    except Exception as e:
+        _log(f"[daemon] L1 失败吸收器失败(不影响主流程): {e}")
+
+
+def run_bias_corrector_subprocess(py):
+    """L3 偏置纠正器（学习模块）：每轮 L1 之后跑。
+    输入=L1 的 failure_taxonomy.json + avoidance_prior.json + 驾3 提案 fate(ingest_fate.jsonl)；
+    产出=bias_corrector.json（已证伪路线清零/降 seed 预算、高新颖度倾斜、驾1 精英保留偏置），
+    供 ci_evolve(驾3) / engine_core.Evolution(驾1) 消费（契约基石二：学习回馈三驾车）。
+    容错：失败不影响主流程（下一轮重试）。"""
+    try:
+        proc = subprocess.run(
+            [py, "-u", os.path.join(HERE, "bias_corrector.py"), "--from-state"],
+            cwd=HERE, capture_output=True, text=True, timeout=120,
+        )
+        for line in (proc.stdout or "").splitlines():
+            _log("[L3] " + line)
+        if proc.returncode != 0:
+            _log(f"[daemon] L3 偏置纠正器返回码={proc.returncode}")
+    except subprocess.TimeoutExpired:
+        _log("[daemon] L3 偏置纠正器超时(120s), 跳过本轮")
+    except Exception as e:
+        _log(f"[daemon] L3 偏置纠正器失败(不影响主流程): {e}")
 
 
 def run_ingest_subprocess(py):

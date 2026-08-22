@@ -20,6 +20,7 @@ import sys
 import json
 import argparse
 import subprocess
+import datetime
 
 import numpy as np
 import data as D
@@ -83,6 +84,9 @@ def main():
     f = FR.load_frontier(DATA_DIR)
     added = 0
     rejected = 0
+    # 契约基石二：驾3 提案过闸的「存活/淘汰」必须结构化落盘，供 L1 失败吸收器消费。
+    fate_path = os.path.join(DATA_DIR, "ingest_fate.jsonl")
+    fate_fp = open(fate_path, "a", encoding="utf-8")
     for c in cands:
         sig, test, params = c.get("sig"), c.get("test"), (c.get("params") or {})
         if sig is None or test is None:
@@ -91,6 +95,13 @@ def main():
         ctrl = RA.random_control_label(sig, [test], N, seed=GATE_SEED, k_sur=60)
         label = rec.get("label")
         artifact = (ctrl == "SURVIVOR")  # 纯随机也 SURVIVOR => 构造伪结构
+        fate_fp.write(json.dumps({
+            "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+            "sig": sig, "test": test, "params": params,
+            "label": label, "artifact": bool(artifact),
+            "p_shuffle": rec.get("p_shuffle"),
+            "ctrl_label": ctrl,
+        }, ensure_ascii=False) + "\n")
         if label == "SURVIVOR" and not artifact:
             g = {"sig": sig, "test": test, "params": params}
             gkey = E.genome_key(sig, test, params)
@@ -106,6 +117,7 @@ def main():
             rejected += 1
             print("  [拒绝] sig=%s test=%s label=%s artifact=%s"
                   % (sig, test, label, artifact))
+    fate_fp.close()
 
     print("[ingest] 通过闸门=%d  拒绝=%d  新增精英=%d" % (added, rejected, added))
     if added and not args.dry_run:

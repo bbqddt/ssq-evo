@@ -110,6 +110,23 @@
 - **`dashboard/` + `daily_digest.jsonl` 永不进 GitHub**（`.gitignore`）；`ga-candidates` 只存提案非状态。
 - **CI 只提案、驾1 把关**：候选绝不绕过统一闸门。
 
+### 7.1 学习模块基石契约（2026-08-22 立，永久执行）
+
+用户判定：**搜索只能踩在别人走过的道路上继续（SIGMAPS 27 基信号锁死 → 域若不含真结构则搜不出）；学习才能在错误道路上纠正/吸收/改良，故必须有「学习式演进模块」方可成功。** 由此立四条基石，写入 `learning_contract.py`（代码级，不可绕过）：
+
+- **基石一 · 不撒谎的反馈信号（最高优先级，永远执行）**：学习模块**只允许**用反过拟合信号（`oot_blind_p` / `bh_fdr_q` / `random_control_label` / `null_positive_control` / `zero_hypothesis_cross` / `wf_verdict`），**严禁**把 `in_sample_accuracy` / `backtest_fit` / `train_auc` / `discovery_only_*` 当优化目标——后者必从噪声造出可信假阳性（Goodhart）。红队钩子 `redteam_check_learning_signal()` 专盯此违规。
+- **基石二 · 三驾车必须用上、必须回馈**（用户 2026-08-22 开工前特别强调）：学习模块**输入必须来自三驾车真实产出**（驾1 每轮闸门 state + 驾3 提案过闸存活/淘汰），**产出必须回馈三驾车**（新原语写回 SIGMAPS → 驾1/驾3 下一轮在新空间搜；`avoidance_prior` 注入候选生成）。闭环守卫 `assert_three_car_closure()` 强制可追踪，违反即 `ClosureViolation`。
+- **基石三 · 回馈必须 confirm 段复验**：学习模块 discovery 段说显著 ≠ 生产确认；任何回馈进 SIGMAPS 的新原语，驾1/驾3 首次用到它时必须再过 #41 发现/确认分离闸门才算「真吸收」（`requires_confirm_recheck()`）。
+- **基石四 · 人类保留否决权**：任何「吸收进假设空间」默认进 `pending_primitives.json` 待复核池，**绝不自动 merge 进生产 SIGMAPS**（`stage_for_human_review()` / `gate_absorb()`）。
+
+> 学习模块四层架构（开放面做深做广，不止扩基信号）：L1 失败吸收器（failure_absorber，记 failure_taxonomy + avoidance_prior）/ L2 原语扩张器（axis_proposer + representation_zoo 改造，扩基信号·复合算子·测试方法·表示空间四类归纳偏置）/ L3 偏置纠正器（bias_corrector，按失败类型+新颖度分配探索预算）/ L4 人类复核与回馈闭环。**第 1 步 `learning_contract.py` 已落地（self_check 通过，2026-08-22）；L1 `failure_absorber.py` 已落地并接入 daemon 每轮调用（2026-08-22），后续 L2~L4 按落地顺序推进。**
+
+> **L1 实现要点（2026-08-22）**：`failure_absorber.py` 接驾1 闸门 `state.json` + 驾3 提案过闸 `ingest_fate.jsonl`（由 `ingest_candidates.py` 顺带结构化落盘，契约基石二刚需），把失败编码为 `failure_taxonomy`（degenerate_stat/boundary_artifact/single_fold_fragile/multiplicity_noise/periodic_hallucination/small_sample/low_number_bias/cold_number_trap/null_honest）+ 跨轮累加计数。`build_avoidance_prior()` 生成 `avoidance_prior.json`（回避权重随失败次数递增，null_honest 不计入避开）。daemon 每轮 `run_cycle` 后调用 `run_failure_absorber_subprocess`，落盘后供 `run_cycle`/`ci_evolve` 生成候选时降权已知死胡同——**闭环回馈三驾车已实现**。L1 只记录+回馈偏置，绝不 merge 结构进 SIGMAPS（基石四）。
+
+> **L2 实现要点（2026-08-22）**：`axis_proposer.py` 从残差/变换提议 27 个基信号之外的新基信号（lp_ 前缀，5 个确定性变换族：间隔偏度/质心速度/两两相关/蓝球残差自相关/熵率），**复用驾1 引擎 `run_axes.label_axis`（shuffle+AAFT+subset_marginal 三零假设）+ `random_control_label` 构造伪结构拦截**做 discovery 验证；过 `learning_contract.gate_absorb` 准入（zero_hypothesis_cross 必须为真、随机对照非伪结构）；通过才 `stage_for_human_review` 进 `pending_primitives.json`。**实测（3493 期真实数据）：5 提议全部被诚实拦截（4 非 SURVIVOR + 1 伪结构），待复核池空——null 域不制造信号**。修复了 gate_absorb 逻辑漏洞（原"字段存在"误放非 SURVIVOR 结论）与 selfcheck 解包 bug。`review_primitives.py` 是 L4 人类复核入口（唯一能把学习产出 merge 进 SIGMAPS 的通道，基石四落地）；当前默认不接入 daemon 自动跑（避免每轮堆积待复核，需人工触发）。L2/L4 暂不自动 merge，符合"学习产出须过 #41 confirm 复验 + 人类否决权"。
+
+> **L3 实现要点（2026-08-22）**：`bias_corrector.py` 偏置纠正器——把 L1 的 `failure_taxonomy` + `avoidance_prior` + 驾3 `ingest_fate.jsonl` 转化成**探索预算偏置**并回馈三驾车：① 连续失败 ≥3 次的路线标记 `debunked_tests`/`debunked_sigs`（如 boundary_artifact→`perm_entropy` 边界伪结构）；② 低频 sig/test 算 `novelty_tilt`（倾斜 seed 预算）；③ 驾1 `engine_core.Evolution` 加 `elite_bias` 参数（已证伪 sig 精英保留概率降至 0.2，高新颖度升至 ≤1.5）；④ `ci_evolve`（驾3）读 `bias_corrector.json` 对已证伪 test 仅 20% 保留候选、高新颖度加权。daemon 每轮 `run_cycle`→L1→**run_bias_corrector_subprocess** 落 `bias_corrector.json`。**这是"纠正搜索偏好"的闭环最后一环**：系统主动偏离已证伪路线，把算力挪到未踩死的方向，而非只在旧空间重调权重。selfcheck 通过（含三驾车闭环约束）。
+
 ---
 
 ## 8. 已知坑与防复发（血泪清单）
@@ -142,6 +159,10 @@
 - **端到端 GA 管线本地实测贯通**：3 seed → 24 候选 → 闸门 1 过 23 拒（`red_parity/multiscale_se` 被随机对照判 `artifact=True` 正确拦截）。
 - **三驾车全在岗**：容器 running + 看门狗（含 fetch 候选）+ CI（cron 北京 21:17）。
 - ⚠️ 持续迭代在 null 域只扩大搜索广度，**不制造信号**；切勿因 cycle 数变多而误判"发现结构"。
+- **学习模块基石契约落地（2026-08-22 开工第 1 步）**：新建 `learning_contract.py`（零依赖、自检通过），写死四条基石（不撒谎反馈信号 / 三驾车闭环 / confirm 复验 / 人类否决）。同步把 `learning_contract.py` 加进 Dockerfile COPY + 构建期冒烟 import 列表（防漏拷崩容器）。L1~L4（失败吸收/原语扩张/偏置纠正/人类复核闭环）待续。
+- **L1 失败吸收器落地（2026-08-22 第 2 步）**：新建 `failure_absorber.py`（selfcheck 通过），接驾1 `state.json` + 驾3 `ingest_fate.jsonl`（后者由 `ingest_candidates.py` 顺带结构化落盘，契约基石二刚需）；编码 `failure_taxonomy` + `avoidance_prior.json`；daemon 每轮 `run_cycle` 后调 `run_failure_absorber_subprocess` 落盘，供 run_cycle/ci_evolve 生成候选时降权死胡同。**闭环回馈三驾车已实现**。实测：读真实 state(cycle 359) 分类出 degenerate_stat/boundary_artifact/multiplicity_noise 并落盘。Dockerfile 已补拷 failure_absorber + ingest_candidates 入冒烟 import。L2~L4 待续。
+- **L2 原语扩张器 + L4 人类复核落地（2026-08-22 第 3 步）**：新建 `axis_proposer.py`（selfcheck 通过，修复 gate_absorb 漏洞 + selfcheck 解包 bug）+ `review_primitives.py`（L4 入口）。L2 复用驾1 引擎做 discovery 验证 + 随机对照拦截，过 gate_absorb 才进 `pending_primitives.json`；实测 3493 期真实数据 5 提议全被诚实拦截（待复核池空，null 域不造信号）。L4 是唯一 merge 通道，默认不自动跑（需人工触发复核）。Dockerfile 已补拷 axis_proposer + review_primitives 入冒烟 import。
+- **L3 偏置纠正器落地（2026-08-22 第 4 步）**：新建 `bias_corrector.py`（selfcheck 通过，含三驾车闭环约束校验）。把 L1 的 `failure_taxonomy`/`avoidance_prior` + 驾3 `ingest_fate.jsonl` 转化为探索预算偏置并回馈三驾车：连续失败≥3 次路线标记 `debunked_tests`/`debunked_sigs`；低频方向算 `novelty_tilt` 倾斜 seed 预算；驾1 `engine_core.Evolution` 加 `elite_bias` 参数（已证伪 sig 精英保留降至 0.2）；驾3 `ci_evolve` 读 `bias_corrector.json` 对已证伪 test 仅 20% 保留候选。daemon 每轮 `run_cycle`→L1→**run_bias_corrector_subprocess** 落 `bias_corrector.json`。**至此学习闭环四层（基石契约/L1/L2+L4/L3）已全部落地**，学习模块从"离线玩具"升级为真正回馈三驾车大脑的闭环。Dockerfile 已补拷 bias_corrector 入冒烟 import。
 
 ### 9.2 智能模块现状（2026-08-22 核查 + 开启红队）
 

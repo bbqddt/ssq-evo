@@ -23,6 +23,19 @@ import data as D
 import engine_core as E
 
 
+def _load_bias_corrector():
+    """读学习模块 L3 的偏置纠正产物（契约基石二：学习回馈三驾车）。
+    缺失/损坏时返回空 dict，不影响驾3 提案（优雅降级）。"""
+    p = os.path.join(os.environ.get("DATA_DIR", "D:/ssq_evo_data"), "bias_corrector.json")
+    if not os.path.exists(p):
+        return {}
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, default=1)
@@ -52,18 +65,30 @@ def main():
                       sur_type="aaft", n_workers=0)
     leaderboard, all_evals = evo.run()
 
+    # 学习模块 L3 回馈：读 bias_corrector.json，对已证伪 test 的方向降候选保留权重
+    bias = _load_bias_corrector()
+    debunked_tests = set(bias.get("debunked_tests", []))
+    novelty_tilt = bias.get("novelty_tilt", {})
+
     items = sorted(leaderboard.values(),
                    key=lambda e: (e.get("p_raw") if e.get("p_raw") is not None else 1.0)
                    )[:args.top_k]
     cands = []
     for e in items:
+        test = e.get("test")
+        # 已证伪 test（如 perm_entropy 边界伪结构）→ 仅以 20% 概率保留，把 seed 预算让给未证伪方向
+        if test in debunked_tests and rng.random() > 0.2:
+            continue
+        # 高新颖度方向（低频 sig/test）→ 提升保留优先级（在 top_k 内加权）
+        tilt = novelty_tilt.get(test) or novelty_tilt.get(e.get("sig"), 1.0)
         cands.append({
             "sig": e.get("sig"),
-            "test": e.get("test"),
+            "test": test,
             "params": e.get("params"),
             "p_raw": e.get("p_raw"),
             "z": e.get("z"),
             "tier": e.get("tier"),
+            "bias_tilt": tilt,
         })
 
     out = {
