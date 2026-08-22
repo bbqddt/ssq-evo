@@ -133,7 +133,7 @@
 
 ## 9. 当前状态（2026-08-21 实测）
 
-- **main = `11915da`**（驾3 提案摄入成功后消费即删防重复白耗算力；接通驾3→驾1 链路；看门狗 fetch ga-candidates；调度 timed 持续迭代；Dockerfile 补拷驾3 脚本；镜像 SHA 追溯；**开启只读红队自审 redteam_audit_enabled=true**）
+- **main = `c053081`**（智能段预筛降 surrogate/budget 把单轮 ~25min 压回 ~8min；开启启发式智能演进层 `intelligent_evolution_enabled=true`；开启只读红队自审；驾3 摄入消费即删；接通驾3→驾1 链路；调度 timed 持续迭代；Dockerfile 补拷驾3 脚本；镜像 SHA 追溯）
 - **8/22 三驾车空转核查（关键结论）**：驾1 ✅ 持续跑(cycle 350, 每轮调 ingest)；驾3 ✅ **未空转**——8/21 cron 已产 `ga-candidates` 分支 `candidates.json`（6 seed × 48 候选）；唯一空转点是**看门狗→卷搬运链**：看门狗 fetch 走本机代理 10808，代理宕时拉空，导致驾1 每轮 ingest「无候选可摄入」。手动经 git+openssl 代理桥接把 48 候选灌入卷后，驾1 在 cycle 349 **真实摄入：通过闸门=4 拒绝=44 新增精英=4**（frontier 12→16），端到端闭环验证通过。
 - **调度已修复算力空转**：`configs/engine.yaml` `schedule_mode: data_driven` → `timed`（`schedule_hours=0.25` → 每 15min 跑一轮全量 GA）。此前 data_driven 让 daemon 两次开奖间只 60min 轮询空转，公式进化实际仅 ~3 次/周；改后 ~96 轮/日，真正 7×24 持续公式迭代（cycle 339 已在定时模式下跑通验证）。
 - **驾1**：cycle 344（verify 时），best_sig 仍处随机区间，**Walk-Forward NULL/UNCONFIRMED → 判 null**（无超越随机可提取结构）。诚实结论不变：仍 null 域。
@@ -148,12 +148,13 @@
 用户质疑"智能模块没有参与演进、没提供方向"——核查结论：
 
 - **LLM 提案者（`LLMProposer`，`proposer.py:167`）= 预留插槽，默认 disabled**，调用即 `raise NotImplementedError`；全仓库无任何 `openai/anthropic/gpt` 端点调用。**LLM 完全没接入演进**。
-- **自主进化层（`IntelligentEvolution`，`run_cycle.py:58,491`）= `"intelligent_evolution_enabled": False` 默认关闭**——假设起草+红队对抗+自动过度声称检测的"创造型智能"未启用。
+- **自主进化层（`IntelligentEvolution`，`proposer.py`）— 2026-08-22 由 `false` 改为 `true` 开启**：注意它不是外部 LLM 占位那套（`LLMProposer` 仍 disabled、无 API 端点），而是**启发式结构化搜索**（`HypothesisGenerator` 突变精英/组合信号/新家族探索/参数扫描 + `MetaController` 按停滞度分配探索-利用预算 + `DiversityManager` 防近亲坍缩），全部在 `firewall.py` 数据隔离内侧运行，**绝不接触 holdout/确认段、绝不自动合并**。
 - **红队自审（`redteam_audit`，`run_cycle.py:866`）= 2026-08-22 由 `false` 改为 `true` 开启**——**只读对抗审计器**，每轮 cycle 末尾读 state.json 写 `audit/report.json+md`（verdict + findings），绝不搜索结构、绝不自动合并、不改代码。
-- **实质在跑的演进**：`GAProposer` + `engine_core.Evolution` 纯遗传算法（变异+选择），无方向性引导——即用户看到的"盲试"。
-- **为何默认关（诚信红线）**：红线#1 禁无监督自演进以过闸为目标搜并自动合并（null 域必造假阳性）；红线#6 自主进化层 LLM 绝不许看 holdout/确认段、SIGNAL 仅经独立确认段复现才成立、人类保留否决权绝不自动合并。
+- **实质在跑的演进**：`GAProposer` + `engine_core.Evolution` 纯遗传算法（变异+选择）为底座，叠加启发式智能层每轮注入结构化候选（cycle 356 实测 `[intel] 智能层生成 21 候选 → 并入 18`；调优后 cycle 357 `[intel] 生成 12 → 并入 9`）。
+- **为何此前默认关（诚信红线）**：红线#1 禁无监督自演进以过闸为目标搜并自动合并（null 域必造假阳性）；红线#6 自主进化层 LLM 绝不许看 holdout/确认段、SIGNAL 仅经独立确认段复现才成立、人类保留否决权绝不自动合并。本次开启的启发式层满足该约束（无 LLM 端点、数据隔离焊死、仅提案不合并）。
 - **开启红队后的首份报告（cycle 354, 12:03）**：verdict=**ALERT**，发现 1 条——`best_z_history` 含荒谬离群值 `1.16e+09`（退化统计，某检验 stat 分母近零，显著性不可信，应从候选池剔除）。这就是"智能挑自己毛病"的方向性洞察，已每轮自动产出。
-- **待决策（创造型智能）**：若要真正的方向性引导（LLM 起草有物理意义的假设 + 红队对抗 + 过度声称检测），需①焊死防火墙（firewall.py 数据隔离已就位）②显式 `intelligent_evolution_enabled:true` ③明确人类否决权、绝不自动合并。这是重大架构决策，需用户拍板，非默认开启。
+- **启用单轮耗时回归与修复（重要实操坑）**：初开智能层时 `proposer.py` 智能段预筛用 `k_sur=k_light(25)` → 单轮从 ~8min 暴涨到 ~24min（3 倍吞吐回归）。修复：`configs/engine.yaml` 加 `intelligent.intel_ksur: 12` + `intel_budget: 18`（预筛硬门用更轻的 12、预算 30→18），候选仍进主流水线走完整 `k_light/k_heavy` 显著性。**修复后实测 cycle 357 ~8min/轮**，智能段零净吞吐代价接入。
+- **关于"智能参与是否过小"的判断（2026-08-22 答复用户）**：当前智能层是**启发式结构化搜索**，提供"往哪搜"的方向（突变精英/组合/新家族），但**没有 LLM 语义层**——不会基于物理直觉起草全新假设。它当前每轮注入 ~9-18 候选并入同款闸门，占每轮总量约 10-20%，属于"有效但保守"的参与比例。若要更大参与或真正的语义智能，需接入外部 LLM（当前 `LLMProposer` 仍是 NotImplementedError 占位），那一步涉及 API 密钥、成本与更强的 Goodhart 风险，应单独评估而非默认开。
 
 ### 9.1 三驾车 × 公式进化 配合（2026-08-21 接通驾3→驾1）
 - **驾1（本地 Docker 引擎）= 唯一真相源**：GA 公式进化 `engine_core.Evolution`（genome=sig+test+params），每 15min 跑一轮全量 cycle → 更新 frontier（精英记忆）+ best_sig。
