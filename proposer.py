@@ -360,7 +360,10 @@ class IntelligentEvolution:
         # 防火墙硬门：每个候选先过 随机重放 + 审计；通过才进入同款引擎评估
         pending_evals = []
         n_dropped = 0
-        k_sur = self.cfg.get("k_light", 25)
+        # 智能段预筛用更轻的 surrogate 数(intel_ksur)：防火墙只是"随机重放硬门"，
+        # 候选仍会进主流水线走完整 k_light/k_heavy 显著性，故预筛不必用满 25。
+        # 否则 18候选×50次surrogate 会把单轮从~8min拖到~25min(3x吞吐回退)。
+        k_sur = self.cfg.get("intel_ksur", 12)
         for i, s in enumerate(specs):
             passed, label = FW.firewall_gate(s.genome(), s.source, disc_fp,
                                              seed0 + i, N=disc_r.shape[0], k_sur=k_sur)

@@ -55,7 +55,8 @@ engine:
   # 注：叶子键带 intelligent_ 前缀（loader 扁平化丢父级名）。
   intelligent:
     intelligent_evolution_enabled: true
-    intel_budget: 30                   # 每轮智能层并入闸门管的候选上限
+    intel_budget: 18                   # 每轮智能层并入闸门管的候选上限(降自30以控单轮时长)
+    intel_ksur: 12                     # 智能段防火墙预筛 surrogate 数(降自k_light=25以控单轮时长)
 
   # 调度模式（daemon_loop.py 读取；控制引擎何时跑全量 cycle）
   #   schedule_mode 取值（daemon_loop 仅对 == "data_driven" 特殊处理，其它值一律回退定时/连续）：
