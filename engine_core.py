@@ -948,14 +948,17 @@ def mutate_genome(g, rng):
     """对基因组做突变：宏观换模块 或 微调某个旋钮（hill-climbing 核心）。"""
     ng = {"sig": g["sig"], "test": g["test"],
           "params": copy.deepcopy(g["params"])}
+    # comp 复合公式基因组：params 仅含 _comp（无 _test/_sig），跳过基信号参数微调，
+    # 直接走末尾的复合表达式变异分支（避免 KeyError 且保持组合语义）。
+    is_comp = (ng["sig"] == "comp")
     r = rng.random()
-    if r < 0.15:                       # 宏观变异：换检验
+    if not is_comp and r < 0.15:                       # 宏观变异：换检验
         ng["test"] = rng.choice(TEST_NAMES)
         ng["params"]["_test"] = _random_params(ng["sig"], ng["test"], rng)["_test"]
-    elif r < 0.30:                     # 宏观变异：换信号映射
+    elif not is_comp and r < 0.30:                     # 宏观变异：换信号映射
         ng["sig"] = rng.choice(SIG_NAMES)
         ng["params"]["_sig"] = _random_params(ng["sig"], ng["test"], rng)["_sig"]
-    elif r < 0.85:                     # 微调检验参数
+    elif not is_comp and r < 0.85:                     # 微调检验参数
         schema = PARAM_SCHEMA.get(ng["test"], {})
         if schema and rng.random() < 0.7:
             k = rng.choice(list(schema.keys()))
@@ -969,18 +972,18 @@ def mutate_genome(g, rng):
                 lo, hi, st = s2[k]
                 cur = ng["params"]["_sig"].get(k, lo)
                 ng["params"]["_sig"][k] = int(min(hi, max(lo, cur + st * rng.choice([-1, 1]))))
-    else:                              # 微调信号参数
+    elif not is_comp:                              # 微调信号参数
         s2 = SIG_PARAM_SCHEMA.get(ng["sig"], {})
         if s2:
             k = rng.choice(list(s2.keys()))
             lo, hi, st = s2[k]
             cur = ng["params"]["_sig"].get(k, lo)
             ng["params"]["_sig"][k] = int(min(hi, max(lo, cur + st * rng.choice([-1, 1]))))
-    # 重排基因：偶尔切换块状宇宙探针模式
+    # 重排基因：偶尔切换块状宇宙探针模式（comp 也支持，作为方向探针）
     if rng.random() < 0.12:
         ng["params"]["_reorder"] = rng.choice(REORDER_MODES)
     # 复合公式层：若当前为 comp 个体，一并变异其表达式
-    if ng["sig"] == "comp":
+    if is_comp:
         if "_comp" not in ng["params"] or not ng["params"]["_comp"]:
             ng["params"]["_comp"] = _random_comp_params(rng)
         else:
@@ -1670,14 +1673,17 @@ class Evolution:
                         a, b = self.rng.choice(len(base_pool), 2, replace=False)
                         ga, gb = base_pool[a], base_pool[b]
                         # 重组：交换信号映射 或 检验（保留各自参数作起点；不丢 _comp/_reorder）
+                        # 兼容 comp 基因组：其 params 仅有 _comp（无 _test），缺键则跳过交换、保留原块。
                         if self.rng.random() < 0.5:
                             cp = copy.deepcopy(gb["params"])
-                            cp["_test"] = copy.deepcopy(ga["params"]["_test"])
-                            newpop.append({"sig": gb["sig"], "test": ga["test"], "params": cp})
+                            if "_test" in ga["params"]:
+                                cp["_test"] = copy.deepcopy(ga["params"]["_test"])
+                            newpop.append({"sig": gb["sig"], "test": gb.get("test"), "params": cp})
                         else:
                             cp = copy.deepcopy(ga["params"])
-                            cp["_test"] = copy.deepcopy(gb["params"]["_test"])
-                            newpop.append({"sig": ga["sig"], "test": gb["test"], "params": cp})
+                            if "_test" in gb["params"]:
+                                cp["_test"] = copy.deepcopy(gb["params"]["_test"])
+                            newpop.append({"sig": ga["sig"], "test": ga.get("test"), "params": cp})
                     else:
                         # 突变（hill-climbing 主体）：以幸存者为基微调参数/模块
                         base = self.rng.choice(base_pool) if base_pool else self._safe_random_genome(self.rng)

@@ -29,6 +29,7 @@ import positive_control as PC
 import firewall as FW
 import proposer as PR
 import scoring as SC
+import formula_composer as FC
 
 MASTER = os.path.join(DATA_DIR, "ssq_master.csv")
 DB = os.path.join(DATA_DIR, "ssq_evo.db")
@@ -446,6 +447,23 @@ def main():
     else:
         print("[L3] GA 跨轮 prune: 无（本轮无已证伪方向）")
 
+    # —— 公式代数演进驱动器（修复 df_gen 锁死根因）——
+    # 从 frontier 精英里提取通过闸门的 comp 复合公式树，用 FormulaComposer 交配+变异
+    # 长出下一代候选，作为精英种子并入 GA（统一闸门）。让 df_gen 真正等于组合代数代次。
+    _comp_elites = [g.get("params", {}).get("_comp") for g in elite_seeds
+                    if g.get("sig") == "comp" and isinstance(g.get("params", {}).get("_comp"), dict)]
+    composer = FC.FormulaComposer(rng, start_gen=int(fr.get("df_gen", 1) or 1))
+    if _comp_elites:
+        _comp_genomes = composer.breed_from_elites(_comp_elites, n=cfg.get("comp_breed_n", 8))
+        print(f"[composer] 从 {len(_comp_elites)} 个 comp 精英交配变异，长出第 {composer.gen} 代 {len(_comp_genomes)} 候选")
+    else:
+        # 无 comp 精英时启动第 1 代随机复合公式，启动演进（不再让代数空转）
+        _comp_genomes = composer.seed_gen1(n=cfg.get("comp_breed_n", 8))
+        print(f"[composer] 无 comp 精英，启动第 {composer.gen} 代随机复合公式 {len(_comp_genomes)} 候选")
+
+    # 把 composer 产出的 comp 候选作为精英种子并入 GA（统一闸门裁决，不旁路）
+    elite_seeds = (list(elite_seeds) + _comp_genomes)
+
     evo = E.Evolution(ga_reds, ga_blues, rng, k_light=cfg["k_light"], k_heavy=cfg["k_heavy"],
                       epochs=cfg["epochs"], pop=cfg["pop"],
                       elites=elite_seeds, frontier=fr, eval_cache=ec,
@@ -493,12 +511,25 @@ def main():
     print(f"[cycle] 因果扫描: 测试 {caus['n']} 组合, q_min={caus['q_min']:.4g}, "
           f"最强={caus['best_sig']}/{caus['best_test']} (p={caus['p_min']:.4g}, {caus['verdict']})")
 
-    # 2c. #39 可微 Formula 候选（实验性，默认关闭）：发现段数值优化连续超参生成候选，
-    #     冻结后并入统一诚信闸门池（BH-FDR + OOT + 交叉零假设 + #41 发现/确认分离闸门），
-    #     与演化/谱/因果候选完全相同的待遇，绝不绕过任何闸门。
-    df_gen, df_added, df_recs = run_diff_formula_candidates(reds, blues, rng, cfg, seen_keys, all_evals)
-    if df_gen:
-        print(f"[cycle] #39 可微Formula: 生成 {df_gen}, 入池 {df_added}")
+    # 2c. 公式语言代数（df_gen）语义修正：
+    #     原 #39 diff_formula 返回 len(recs) 被误标为"代数"，实为"每轮候选数"→ df_gen 长期锁 6。
+    #     现改为 FormulaComposer 的真实代数代次（复合公式树最大嵌套深度+1），
+    #     并随精英交配变异真正往上长。df_added = 本轮回合 composer 新增的组合候选数。
+    _df_disabled = not cfg.get("diff_formula_enabled", False)
+    if _df_disabled:
+        df_gen = composer.gen
+        df_added = len(_comp_genomes)
+        df_recs = []
+        print(f"[composer] 公式代数 df_gen={df_gen}（真实代次）, 本轮回合新增组合 {df_added}")
+    else:
+        # #39 仍启用时：保留其候选产出，但 df_gen 以 composer 真实代次为准
+        _df_raw_gen, _df_raw_added, df_recs = run_diff_formula_candidates(
+            reds, blues, rng, cfg, seen_keys, all_evals)
+        df_gen = composer.gen
+        df_added = len(_comp_genomes)
+        if _df_raw_gen:
+            print(f"[cycle] #39 可微Formula: 生成 {_df_raw_gen}, 入池 {_df_raw_added}"
+                  f" | [composer] 公式代数 df_gen={df_gen}, 新增组合 {df_added}")
 
     # 3b. 非平稳性 / 物理磨损监控闸门（方向1）：每球频率随时间漂移 + 短期动量
     #     与演化/谱/因果 FDR 池分离——它测的是"单球边际频率的时间非平稳"，
@@ -657,6 +688,9 @@ def main():
                      "above": bool(acc["above_random"]),
                      "n": int(acc["n"])})
         fr["acc_history"] = hist[-200:]
+    # 公式代数代次持久化（跨轮继承，让 df_gen 真实增长而非每轮重启）
+    fr["df_gen"] = int(composer.gen)
+    fr["df_added_last"] = int(df_added)
     F.save_frontier(DATA_DIR, fr)
     z_hist = fr["best_z_history"]
     newly = fr["coverage"] - prev_tried
