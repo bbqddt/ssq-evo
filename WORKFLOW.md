@@ -133,7 +133,7 @@
 
 ## 9. 当前状态（2026-08-21 实测）
 
-- **main = `ffde0c3`**（驾3 提案摄入成功后消费即删防重复白耗算力；接通驾3→驾1 链路；看门狗 fetch ga-candidates；调度 timed 持续迭代；Dockerfile 补拷驾3 脚本；镜像 SHA 追溯）
+- **main = `11915da`**（驾3 提案摄入成功后消费即删防重复白耗算力；接通驾3→驾1 链路；看门狗 fetch ga-candidates；调度 timed 持续迭代；Dockerfile 补拷驾3 脚本；镜像 SHA 追溯；**开启只读红队自审 redteam_audit_enabled=true**）
 - **8/22 三驾车空转核查（关键结论）**：驾1 ✅ 持续跑(cycle 350, 每轮调 ingest)；驾3 ✅ **未空转**——8/21 cron 已产 `ga-candidates` 分支 `candidates.json`（6 seed × 48 候选）；唯一空转点是**看门狗→卷搬运链**：看门狗 fetch 走本机代理 10808，代理宕时拉空，导致驾1 每轮 ingest「无候选可摄入」。手动经 git+openssl 代理桥接把 48 候选灌入卷后，驾1 在 cycle 349 **真实摄入：通过闸门=4 拒绝=44 新增精英=4**（frontier 12→16），端到端闭环验证通过。
 - **调度已修复算力空转**：`configs/engine.yaml` `schedule_mode: data_driven` → `timed`（`schedule_hours=0.25` → 每 15min 跑一轮全量 GA）。此前 data_driven 让 daemon 两次开奖间只 60min 轮询空转，公式进化实际仅 ~3 次/周；改后 ~96 轮/日，真正 7×24 持续公式迭代（cycle 339 已在定时模式下跑通验证）。
 - **驾1**：cycle 344（verify 时），best_sig 仍处随机区间，**Walk-Forward NULL/UNCONFIRMED → 判 null**（无超越随机可提取结构）。诚实结论不变：仍 null 域。
@@ -142,6 +142,18 @@
 - **端到端 GA 管线本地实测贯通**：3 seed → 24 候选 → 闸门 1 过 23 拒（`red_parity/multiscale_se` 被随机对照判 `artifact=True` 正确拦截）。
 - **三驾车全在岗**：容器 running + 看门狗（含 fetch 候选）+ CI（cron 北京 21:17）。
 - ⚠️ 持续迭代在 null 域只扩大搜索广度，**不制造信号**；切勿因 cycle 数变多而误判"发现结构"。
+
+### 9.2 智能模块现状（2026-08-22 核查 + 开启红队）
+
+用户质疑"智能模块没有参与演进、没提供方向"——核查结论：
+
+- **LLM 提案者（`LLMProposer`，`proposer.py:167`）= 预留插槽，默认 disabled**，调用即 `raise NotImplementedError`；全仓库无任何 `openai/anthropic/gpt` 端点调用。**LLM 完全没接入演进**。
+- **自主进化层（`IntelligentEvolution`，`run_cycle.py:58,491`）= `"intelligent_evolution_enabled": False` 默认关闭**——假设起草+红队对抗+自动过度声称检测的"创造型智能"未启用。
+- **红队自审（`redteam_audit`，`run_cycle.py:866`）= 2026-08-22 由 `false` 改为 `true` 开启**——**只读对抗审计器**，每轮 cycle 末尾读 state.json 写 `audit/report.json+md`（verdict + findings），绝不搜索结构、绝不自动合并、不改代码。
+- **实质在跑的演进**：`GAProposer` + `engine_core.Evolution` 纯遗传算法（变异+选择），无方向性引导——即用户看到的"盲试"。
+- **为何默认关（诚信红线）**：红线#1 禁无监督自演进以过闸为目标搜并自动合并（null 域必造假阳性）；红线#6 自主进化层 LLM 绝不许看 holdout/确认段、SIGNAL 仅经独立确认段复现才成立、人类保留否决权绝不自动合并。
+- **开启红队后的首份报告（cycle 354, 12:03）**：verdict=**ALERT**，发现 1 条——`best_z_history` 含荒谬离群值 `1.16e+09`（退化统计，某检验 stat 分母近零，显著性不可信，应从候选池剔除）。这就是"智能挑自己毛病"的方向性洞察，已每轮自动产出。
+- **待决策（创造型智能）**：若要真正的方向性引导（LLM 起草有物理意义的假设 + 红队对抗 + 过度声称检测），需①焊死防火墙（firewall.py 数据隔离已就位）②显式 `intelligent_evolution_enabled:true` ③明确人类否决权、绝不自动合并。这是重大架构决策，需用户拍板，非默认开启。
 
 ### 9.1 三驾车 × 公式进化 配合（2026-08-21 接通驾3→驾1）
 - **驾1（本地 Docker 引擎）= 唯一真相源**：GA 公式进化 `engine_core.Evolution`（genome=sig+test+params），每 15min 跑一轮全量 cycle → 更新 frontier（精英记忆）+ best_sig。
