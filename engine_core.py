@@ -1553,7 +1553,7 @@ class Evolution:
 
     def __init__(self, reds, blues, rng, k_light=25, k_heavy=10, epochs=6, pop=24,
                  elites=None, frontier=None, sur_type="aaft", n_workers=0, eval_cache=None,
-                 elite_bias=None):
+                 elite_bias=None, prune_sigs=None):
         self.reds = reds
         self.blues = blues
         self.rng = rng
@@ -1565,6 +1565,9 @@ class Evolution:
         self.frontier = frontier or {"tried": []}
         # 学习模块 L3 回馈：{sig: retain_multiplier} 已证伪 sig 降精英保留概率（默认 1.0 不变）
         self.elite_bias = elite_bias or {}
+        # 学习模块 L3 + 随机对照闸门回馈：prune_sigs = 已证伪 sig ∪ 构造伪结构 sig。
+        # 这些是"诚实护栏已判定不可信"的方向，GA 直接不生成、不评估，把算力让给未证伪方向。
+        self.prune_sigs = set(prune_sigs or [])
         self.all_evals = []                          # 本论全部评估（喂 FDR）
         self.leaderboard = {}                        # gkey -> 该基因组最优 eval
         self.tried = set(self.frontier.get("tried", []))
@@ -1572,6 +1575,21 @@ class Evolution:
         self.eval_cache = eval_cache                 # 可选：增量评估缓存（disk）
         # 并行度：默认 min(CPU, pop)；单核环境退化为 1
         self.n_workers = n_workers or max(1, min(_os.cpu_count() or 4, max(2, pop)))
+
+    def _safe_random_genome(self, rng):
+        """random_genome 的护栏包装：拒绝 prune_sigs 中的 sig（学习模块已证伪/构造伪结构）。
+        防止 GA 反复生成已被诚实闸门判死刑的方向，浪费评估算力且污染 frontier。"""
+        if not self.prune_sigs:
+            return random_genome(rng)
+        for _ in range(200):  # 上限防极端情况死循环（prune 比例远小于全集）
+            g = random_genome(rng)
+            if g["sig"] not in self.prune_sigs:
+                return g
+        # 兜底：极端情况下仍返回一个非 prune 信号（从全集随机挑一个未在 prune 中的）
+        alt = [s for s in SIG_NAMES if s not in self.prune_sigs]
+        g = random_genome(rng)
+        g["sig"] = self.rng.choice(alt) if alt else g["sig"]
+        return g
 
     def _k(self, tier):
         return self.k_light if tier == "light" else self.k_heavy
@@ -1587,7 +1605,7 @@ class Evolution:
                 continue  # 该精英本轮不 seed（把算力让给未证伪方向）
             pop.append(dict(g))
         while len(pop) < self.pop:
-            pop.append(random_genome(self.rng))
+            pop.append(self._safe_random_genome(self.rng))
         return pop
 
     def run(self):
@@ -1644,7 +1662,7 @@ class Evolution:
                 # 选择：按本基因组最优 p_raw 取前 50%
                 evals_sorted = sorted(evals, key=lambda e: self.leaderboard[e["gkey"]]["p_raw"]) if evals else []
                 survivors = evals_sorted[:max(2, len(evals_sorted) // 2)]
-                base_pool = survivors if survivors else [random_genome(self.rng) for _ in range(2)]
+                base_pool = survivors if survivors else [self._safe_random_genome(self.rng) for _ in range(2)]
                 newpop = [{"sig": g["sig"], "test": g["test"],
                            "params": copy.deepcopy(g["params"])} for g in base_pool]
                 while len(newpop) < self.pop:
@@ -1662,9 +1680,9 @@ class Evolution:
                             newpop.append({"sig": ga["sig"], "test": gb["test"], "params": cp})
                     else:
                         # 突变（hill-climbing 主体）：以幸存者为基微调参数/模块
-                        base = self.rng.choice(base_pool) if base_pool else random_genome(self.rng)
+                        base = self.rng.choice(base_pool) if base_pool else self._safe_random_genome(self.rng)
                         if self.rng.random() < 0.3:
-                            newpop.append(random_genome(self.rng))   # 少量纯随机保多样性
+                            newpop.append(self._safe_random_genome(self.rng))   # 少量纯随机保多样性
                         else:
                             newpop.append(mutate_genome(base, self.rng))
                 pop = newpop

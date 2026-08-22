@@ -33,6 +33,34 @@ REPO = os.path.dirname(os.path.abspath(__file__))
 BRANCH = "ga-candidates"
 CAND_FILE = "candidates.json"
 GATE_SEED = 20260820
+# 随机对照闸门 surrogate 数（构造伪结构拦截强度，不可弱化）。
+RCL_K_SUR = 60
+# label_axis 分层 null surrogate 数（足够判定 SURVIVOR，且主进程直跑不 OOM）。
+LABEL_K_SUR = 40
+
+
+def _eval_one(sig, test, params, master_path, N, seed):
+    """主进程内评估单条候选（Windows multiprocessing 在本环境完全不可用，弃用）。
+    优化：只有 label_axis 判 SURVIVOR 才跑 random_control_label（重型），
+    其余候选直接跳过，大幅降内存/时间，避免 OOM 拖垮整轮摄入。
+    返回 (label, p_shuffle, ctrl)；异常 -> ("ERROR", None, None)。"""
+    import gc
+    try:
+        m = D.load_master(master_path)
+        reds, blues, _ = D.to_arrays(m)
+        rng = np.random.default_rng(seed)
+        rec = RA.label_axis(sig, [test], reds, blues, rng, k_sur=LABEL_K_SUR, params=params)
+        del m, reds, blues
+        gc.collect()
+        label = rec.get("label")
+        # 仅 SURVIVOR 需要构造伪结构拦截（非 SURVIVOR 已被分层 null 杀，无需随机对照）。
+        ctrl = None
+        if label == "SURVIVOR":
+            ctrl = RA.random_control_label(sig, [test], N, seed=seed, k_sur=RCL_K_SUR)
+        return (label, rec.get("p_shuffle"), ctrl)
+    except Exception as e:
+        gc.collect()
+        return ("ERROR", None, repr(e)[:200])
 
 
 def fetch_candidates(local_path=None):
@@ -87,46 +115,61 @@ def main():
     # 契约基石二：驾3 提案过闸的「存活/淘汰」必须结构化落盘，供 L1 失败吸收器消费。
     fate_path = os.path.join(DATA_DIR, "ingest_fate.jsonl")
     fate_fp = open(fate_path, "a", encoding="utf-8")
-    for c in cands:
-        sig, test, params = c.get("sig"), c.get("test"), (c.get("params") or {})
-        if sig is None or test is None:
-            continue
-        rec = RA.label_axis(sig, [test], reds, blues, rng, k_sur=40, params=params)
-        ctrl = RA.random_control_label(sig, [test], N, seed=GATE_SEED, k_sur=60)
-        label = rec.get("label")
-        artifact = (ctrl == "SURVIVOR")  # 纯随机也 SURVIVOR => 构造伪结构
-        fate_fp.write(json.dumps({
-            "ts": datetime.datetime.now().isoformat(timespec="seconds"),
-            "sig": sig, "test": test, "params": params,
-            "label": label, "artifact": bool(artifact),
-            "p_shuffle": rec.get("p_shuffle"),
-            "ctrl_label": ctrl,
-        }, ensure_ascii=False) + "\n")
-        if label == "SURVIVOR" and not artifact:
-            g = {"sig": sig, "test": test, "params": params}
-            gkey = E.genome_key(sig, test, params)
-            if g not in f["elites"]:
-                f["elites"].append(g)
-                f["tried"].append(gkey)
-                added += 1
-                print("  [并入精英] sig=%s test=%s p_shuffle=%s"
-                      % (sig, test, rec.get("p_shuffle")))
+    master_path = os.path.join(DATA_DIR, "ssq_master.csv")
+    # 驾3 提案是不可信的外部输入：主进程内逐条评估（Windows multiprocessing spawn
+    # 连续/批量均不稳，弃用），单条异常 -> ERROR 跳过；每轮 gc 防累积 OOM。
+    # 部分保存兜底：finally 无条件 save 已确认的存活精英，绝不丢结果。
+    try:
+        for c in cands:
+            sig, test, params = c.get("sig"), c.get("test"), (c.get("params") or {})
+            if sig is None or test is None:
+                continue
+            label, p_shuffle, ctrl = _eval_one(sig, test, params, master_path, N, GATE_SEED)
+            # 构造伪结构拦截：仅当 label==SURVIVOR 且纯随机数据也 SURVIVOR 时成立。
+            # 非 SURVIVOR 候选跳过 random_control_label(ctrl=None)，不计为 artifact。
+            artifact = (label == "SURVIVOR" and ctrl == "SURVIVOR")
+            fate_fp.write(json.dumps({
+                "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+                "sig": sig, "test": test, "params": params,
+                "label": label, "artifact": bool(artifact) if ctrl is not None else None,
+                "p_shuffle": p_shuffle, "ctrl_label": ctrl,
+            }, ensure_ascii=False) + "\n")
+            if label == "ERROR":
+                rejected += 1
+                print("  [评估异常-跳过] sig=%s test=%s" % (sig, test))
+                continue
+            if label == "SURVIVOR" and not artifact:
+                g = {"sig": sig, "test": test, "params": params}
+                gkey = E.genome_key(sig, test, params)
+                if g not in f["elites"]:
+                    f["elites"].append(g)
+                    f["tried"].append(gkey)
+                    added += 1
+                    print("  [并入精英] sig=%s test=%s p_shuffle=%s"
+                          % (sig, test, p_shuffle))
+                else:
+                    print("  [已存在] sig=%s test=%s" % (sig, test))
             else:
-                print("  [已存在] sig=%s test=%s" % (sig, test))
-        else:
-            rejected += 1
-            print("  [拒绝] sig=%s test=%s label=%s artifact=%s"
-                  % (sig, test, label, artifact))
-    fate_fp.close()
+                rejected += 1
+                print("  [拒绝] sig=%s test=%s label=%s artifact=%s"
+                      % (sig, test, label, artifact))
+    except Exception as e:
+        print("[ingest] 循环异常(兜底部分保存): %s" % repr(e)[:200])
+    finally:
+        fate_fp.close()
+        # 无论如何都保存已收集的存活精英（部分保存），避免进程级崩溃丢结果。
+        if added and not args.dry_run:
+            try:
+                FR.save_frontier(DATA_DIR, f)
+                print("[ingest] 已写入 frontier（精英种子=%d）" % len(f["elites"]))
+            except Exception as e:
+                print("[ingest] 保存 frontier 失败: %s" % repr(e)[:200])
 
     print("[ingest] 通过闸门=%d  拒绝=%d  新增精英=%d" % (added, rejected, added))
-    if added and not args.dry_run:
-        FR.save_frontier(DATA_DIR, f)
-        print("[ingest] 已写入 frontier（精英种子=%d）" % len(f["elites"]))
+    if not added:
+        print("[ingest] 本轮无候选通过闸门（诚实结论：提案未获确认）")
     elif args.dry_run:
         print("[ingest] DRY-RUN：未写入")
-    else:
-        print("[ingest] 本轮无候选通过闸门（诚实结论：提案未获确认）")
     return 0
 
 

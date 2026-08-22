@@ -414,9 +414,42 @@ def main():
                                                      cfg.get("ga_discovery_frac", 0.7))
         print(f"[firewall] GA 已隔离到发现段(前{cfg.get('ga_discovery_frac',0.7):.0%}, "
               f"{ga_reds.shape[0]}期)；确认/实盘段未进入搜索。")
+    # —— 学习模块 L3 回馈（驾1 主引擎侧闭环）：读 bias_corrector.json，
+    #     把"已证伪信号(debunked_sigs)"与本轮随机对照闸门拦截的构造伪结构(prone)合并为
+    #     prune_sigs，传给 GA 使其不生成/不评估这些已被诚实护栏判死刑的方向；
+    #     同时把 debunked_sigs 的精英保留概率降为 0.2（elite_bias），把算力让给未证伪方向。
+    #     注意：本轮新算的 prone 在 Evolution 之后才得出，故 GA 这轮用"上一轮 prone ∪ L3 debunked"，
+    #     下一轮自动继承本轮 prone——这正是学习回馈三驾车跨轮闭环的语义。
+    _bc_path = os.path.join(DATA_DIR, "bias_corrector.json")
+    _debunked = set()
+    _elite_bias = {}
+    if os.path.exists(_bc_path):
+        try:
+            _bc = json.load(open(_bc_path, encoding="utf-8"))
+            _debunked = set(_bc.get("debunked_sigs", []) or [])
+            for s in _debunked:
+                _elite_bias[s] = 0.2
+        except Exception as e:
+            print(f"[L3] 读 bias_corrector 失败(不阻断主流程): {e}")
+    # 上一轮的 prone 持久化在 artifact_prone.json（run_axes 已按 N 缓存），这里复用作为跨轮 prune
+    _prone_path = os.path.join(DATA_DIR, "artifact_prone.json")
+    _prev_prone = set()
+    if os.path.exists(_prone_path):
+        try:
+            _ap = json.load(open(_prone_path, encoding="utf-8"))
+            _prev_prone = set(_ap.get("signals", []) or [])
+        except Exception:
+            pass
+    _prune_sigs = _debunked | _prev_prone
+    if _prune_sigs:
+        print(f"[L3] GA 跨轮 prune: {len(_prune_sigs)} 个已证伪/构造伪结构信号 {sorted(_prune_sigs)}")
+    else:
+        print("[L3] GA 跨轮 prune: 无（本轮无已证伪方向）")
+
     evo = E.Evolution(ga_reds, ga_blues, rng, k_light=cfg["k_light"], k_heavy=cfg["k_heavy"],
                       epochs=cfg["epochs"], pop=cfg["pop"],
-                      elites=elite_seeds, frontier=fr, eval_cache=ec)
+                      elites=elite_seeds, frontier=fr, eval_cache=ec,
+                      elite_bias=_elite_bias, prune_sigs=_prune_sigs)
     leaderboard, all_evals = evo.run()
     print(f"[cycle] 评估算子数(含重复): {len(all_evals)}, 唯一基因组: {len(leaderboard)}")
     # —— 审计账本：记录 GA Top-K 候选的来源留痕（看的数据段指纹/种子/代码版本）——
