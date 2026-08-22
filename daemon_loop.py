@@ -160,6 +160,15 @@ def run_ingest_subprocess(py):
             _log("[ingest] " + line)
         if proc.returncode not in (0, 2):  # 2=无真实数据(跳过)
             _log(f"[daemon] 摄入驾3提案返回码={proc.returncode}")
+        elif proc.returncode == 0:
+            # 摄入成功后消费即删：候选只处理一次，避免每轮重复跑 48×surrogate 白耗算力
+            try:
+                p = os.path.join(DATA_DIR, "candidates.json")
+                if os.path.exists(p):
+                    os.remove(p)
+                    _log("[ingest] 已消费 candidates.json（处理一次，防重复摄入）")
+            except Exception as e:
+                _log(f"[ingest] 删除 candidates.json 失败: {e}")
     except subprocess.TimeoutExpired:
         _log("[daemon] 摄入驾3提案超时(120s), 跳过本轮")
     except Exception as e:
