@@ -702,6 +702,29 @@ def main():
     # 公式代数代次持久化（跨轮继承，让 df_gen 真实增长而非每轮重启）
     fr["df_gen"] = int(composer.gen)
     fr["df_added_last"] = int(df_added)
+
+    # 5.5. 摄入驾3 CI 分布式 GA 提案（ga-candidates 分支 → watchdog 写 candidates.json 到数据卷）
+    #     用 --local 模式读文件（容器内无 git），过统一闸门后并入 frontier。
+    _cand_path = os.path.join(DATA_DIR, "candidates.json")
+    _ingest_result = None
+    if os.path.exists(_cand_path):
+        try:
+            import importlib
+            _ingest_mod = importlib.import_module("ingest_candidates")
+            # 用 --local 模式：读数据卷上的 candidates.json（watchdog fetch 落地）
+            import argparse
+            _ingest_ns = argparse.Namespace(local=_cand_path, dry_run=False)
+            _orig_argv = sys.argv[:]
+            sys.argv = ["ingest_candidates", "--local", _cand_path]
+            try:
+                _ingest_rc = _ingest_mod.main()
+                _ingest_result = "rc=%d" % _ingest_rc
+            finally:
+                sys.argv = _orig_argv
+        except Exception as _ie:
+            print(f"[cycle] ingest_candidates 异常(不影响主流程): {_ie}")
+            _ingest_result = "ERROR"
+
     F.save_frontier(DATA_DIR, fr)
     z_hist = fr["best_z_history"]
     newly = fr["coverage"] - prev_tried
@@ -789,6 +812,7 @@ def main():
         "wf_n_folds": (wf["n_folds"] if wf else None),
         "df_enabled": bool(cfg.get("diff_formula_enabled")),
         "df_gen": df_gen, "df_added": df_added, "df_gen_source": _gen_source,
+        "ingest_ci": _ingest_result,  # 驾3 提案摄入结果（None=无文件/未跑, rc=0=跑完, ERROR=异常）
         "formula_language": _formula_language_field(df_recs, DATA_DIR),
         "positive_control": pc,   # 持续阳性对照：闸门功率监控（None=本轮未跑）
         "stability": _stab,       # 评估稳定性（研发诚实指标）：best_q 近 N 轮 cv/iqr
