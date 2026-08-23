@@ -131,15 +131,27 @@ if (Test-Path $StateFile) {
 }
 
 # --- 0.5) fetch 驾3 提案 (ga-candidates) 到数据卷，供驾1 摄入 ---
+# 注意：raw.githubusercontent.com 经本地代理 TLS 握手失败(exit 35)，
+#       而 api.github.com 经代理可达(HTTP 200)，故改用 GitHub Contents API。
 try {
-    $candUrl = "https://raw.githubusercontent.com/bbqddt/ssq-evo/ga-candidates/candidates.json"
-    $resp = & "$env:SystemRoot\System32\curl.exe" -s -m 20 -x "http://127.0.0.1:10808/" $candUrl 2>$null
-    if ($resp -and $resp.Trim().StartsWith("{")) {
-        Set-Content -Path "$DataDir\candidates.json" -Value $resp -Encoding UTF8
-        Log ("fetched ga-candidates -> candidates.json (" + $resp.Length + " bytes)")
+    $apiUrl = "https://api.github.com/repos/bbqddt/ssq-evo/contents/candidates.json?ref=ga-candidates"
+    $apiResp = & "$env:SystemRoot\System32\curl.exe" -s -m 20 -x "http://127.0.0.1:10808/" $apiUrl 2>$null
+    if ($apiResp -and $apiResp.Trim().StartsWith("{")) {
+        $apiJson = $apiResp | ConvertFrom-Json
+        if ($apiJson.content -and $apiJson.encoding -eq "base64") {
+            # GitHub API 返回 base64 编码内容（含换行需去除）
+            $b64 = $apiJson.content -replace "\s",""
+            $rawBytes = [System.Convert]::FromBase64String($b64)
+            $resp = [System.Text.Encoding]::UTF8.GetString($rawBytes)
+            Set-Content -Path "$DataDir\candidates.json" -Value $resp -Encoding UTF8
+            Log ("fetched ga-candidates via API -> candidates.json (" + $resp.Length + " bytes)")
+        }
+        else {
+            Log "ga-candidates API 返回无 content 字段(文件可能不存在)"
+        }
     }
     else {
-        Log "ga-candidates 暂无候选(分支/文件未生成)或拉取为空"
+        Log "ga-candidates API 无响应或代理不可达"
     }
 }
 catch {
