@@ -56,6 +56,76 @@ def load_frontier():
         return {}
 
 
+def load_state():
+    """加载 run_cycle 持久化状态（best_q/cycle_id/pick_p/coverage 等真相源）"""
+    try:
+        return json.load(open(os.path.join(DATA_DIR, "state.json"), encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _truth_sources():
+    """构建持久化真相源快照（只读，用于值级对账）。
+    关键：daemon.log 的内存打印不算真相；frontier.json / state.json 才是。
+    """
+    fr = load_frontier()
+    st = load_state()
+    elites = fr.get("elites", [])
+    comp_total = sum(1 for e in elites if e.get("sig") == "comp")
+    comp_verified = sum(1 for e in elites
+                        if e.get("sig") == "comp" and e.get("q") is not None)
+    return {
+        "df_gen": fr.get("df_gen"),
+        "coverage": st.get("coverage", fr.get("coverage")),
+        "cycle_id": st.get("cycle_id"),
+        "best_q": st.get("best_q"),
+        "best_sig": st.get("best_sig"),
+        "pick_p": st.get("pick_p"),
+        "comp_elites_total": comp_total,
+        "comp_elites_verified": comp_verified,
+    }
+
+
+def verify_claim_values(claims):
+    """值级强制校验：声明的每个量化指标必须与持久化真相源一致。
+    不一致 → BLOCK（物理上不许出口）。这是根治"看 daemon.log 一行就报好消息"的核心机制。
+    claims: dict {metric: value}
+    返回 dict {verdict, reconcile:[...], truth:{...}, blocked:[...]}
+    """
+    truth = _truth_sources()
+    src = {
+        "df_gen": "frontier.json#df_gen",
+        "coverage": "state.json#coverage",
+        "cycle_id": "state.json#cycle_id",
+        "best_q": "state.json#best_q",
+        "best_sig": "state.json#best_sig",
+        "pick_p": "state.json#pick_p",
+        "comp_elites_total": "frontier.json#elites(sig=comp)",
+        "comp_elites_verified": "frontier.json#elites(sig=comp,q!=None)",
+    }
+    reconcile = []
+    blocked = []
+    for metric, claimed in claims.items():
+        if metric not in src:
+            reconcile.append((metric, claimed, None, False,
+                              "未登记指标（真相源无此字段）→ 禁止凭空声明"))
+            blocked.append(metric)
+            continue
+        actual = truth.get(metric)
+        if isinstance(claimed, (int, float)) and isinstance(actual, (int, float)):
+            ok = abs(float(claimed) - float(actual)) < 1e-9
+        elif isinstance(claimed, str) and isinstance(actual, str):
+            ok = claimed == actual
+        else:
+            ok = (claimed is None and actual is None) or (str(claimed) == str(actual))
+        reconcile.append((metric, claimed, actual, ok, src[metric]))
+        if not ok:
+            blocked.append(metric)
+    verdict = "BLOCK" if blocked else "PASS"
+    return {"verdict": verdict, "reconcile": reconcile,
+            "truth": truth, "blocked": blocked}
+
+
 def check_1_persistence(claim_type=""):
     """
     证据1: 持久化层交叉验证
@@ -282,9 +352,32 @@ def gate_claim(claim_text=""):
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="进展汇报强制闸门")
-    parser.add_argument("--claim", default="", help="待验证的进展声明")
+    parser.add_argument("--claim", default="", help="待验证的进展声明（用词闸门）")
+    parser.add_argument("--verify", default="", help="值级真相对账 JSON, e.g. '{\"df_gen\":2}'")
     parser.add_argument("--json", action="store_true", help="JSON 输出（供程序调用）")
     args = parser.parse_args()
+
+    # 值级闸门优先：任何量化声明必须先过真相对账，对不上物理上不许出口
+    if args.verify:
+        try:
+            claims = json.loads(args.verify)
+        except Exception:
+            print("❌ --verify 参数不是合法 JSON")
+            sys.exit(1)
+        r = verify_claim_values(claims)
+        print("=" * 60)
+        print("  值级真相对账（声明值 vs 持久化真相源）")
+        print("=" * 60)
+        for metric, claimed, actual, ok, s in r["reconcile"]:
+            mark = "✅" if ok else "🚨"
+            print(f"  {mark} {metric}: 声明={claimed} | 真相={actual} | 源={s}")
+        print("-" * 60)
+        if r["verdict"] == "BLOCK":
+            print(f"🚨 BLOCKED — 以下指标与持久化真相不符，禁止出口: {r['blocked']}")
+            print("   规则: 任何量化结论必须先过本对账，对不上不许说。")
+        else:
+            print("✅ PASS — 声明值与持久化真相一致，可出口")
+        sys.exit(0 if r["verdict"] == "PASS" else 1)
 
     verdict, checks, score = gate_claim(args.claim)
 

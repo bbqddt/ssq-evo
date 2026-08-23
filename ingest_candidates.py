@@ -141,6 +141,13 @@ def main():
             if label == "SURVIVOR" and not artifact:
                 g = {"sig": sig, "test": test, "params": params}
                 gkey = E.genome_key(sig, test, params)
+                # 保留已存在精英的 q/verdict/z（绝不因并入提案而剥除评估数据）
+                for ex in f["elites"]:
+                    if E.genome_key(ex.get("sig"), ex.get("test"), ex.get("params", {})) == gkey:
+                        for _k in ("q", "verdict", "z"):
+                            if _k in ex:
+                                g[_k] = ex[_k]
+                        break
                 if g not in f["elites"]:
                     f["elites"].append(g)
                     f["tried"].append(gkey)

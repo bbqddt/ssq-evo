@@ -518,6 +518,21 @@ def main():
     print(f"[cycle] 因果扫描: 测试 {caus['n']} 组合, q_min={caus['q_min']:.4g}, "
           f"最强={caus['best_sig']}/{caus['best_test']} (p={caus['p_min']:.4g}, {caus['verdict']})")
 
+    # 2b.5 全局 BH-FDR 赋 q —— 修复空壳精英根因
+    # 问题: GA 主路径评出的基因组(含 comp 复合公式)只带 p_raw/z, 从不补 q; update_frontier
+    # 靠 e.get("q") 持久化 → comp 精英永远 q=None(空壳) → df_gen 永远无法真实上长。
+    # 此处对全家族(GA+谱+因果)统一 BH-FDR, 把 q 写回 all_evals(与 leaderboard 同对象),
+    # 持久化即带 q。这是之前"空壳修复"没落地的真正原因: frontier.py 只负责存, 数据源头没 q。
+    if all_evals:
+        try:
+            _p = np.array([float(e.get("p_raw", 1.0)) for e in all_evals], dtype=float)
+            _q = E.bh_fdr(_p)
+            for _e, _qv in zip(all_evals, _q):
+                _e["q"] = float(_qv)
+            print(f"[cycle] 全局 BH-FDR 已赋 q: n={len(all_evals)}, q_min={float(_q.min()):.4g}")
+        except Exception as _fe:
+            print(f"[cycle] 全局 FDR 赋 q 失败(不影响主流程): {_fe}")
+
     # 2c. 公式语言代数（df_gen）语义修正：
     #     原 #39 diff_formula 返回 len(recs) 被误标为"代数"，实为"每轮候选数"→ df_gen 长期锁 6。
     #     现改为 FormulaComposer 的真实代数代次（复合公式树最大嵌套深度+1），
