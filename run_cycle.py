@@ -718,27 +718,24 @@ def main():
     fr["df_gen"] = int(composer.gen)
     fr["df_added_last"] = int(df_added)
 
-    # 5.5. 摄入驾3 CI 分布式 GA 提案（ga-candidates 分支 → watchdog 写 candidates.json 到数据卷）
-    #     用 --local 模式读文件（容器内无 git），过统一闸门后并入 frontier。
-    _cand_path = os.path.join(DATA_DIR, "candidates.json")
+    # 5.5. 摄入驾3 CI 分布式 GA 提案（ga-candidates 分支）
+    #     容器内无 git/credential，ingest_candidates 改用 GitHub Contents API 直连，
+    #     不再依赖主机 watchdog 的 fetch（主机只做健康监控+重启）。每轮必跑。
     _ingest_result = None
-    if os.path.exists(_cand_path):
+    try:
+        import importlib
+        _ingest_mod = importlib.import_module("ingest_candidates")
+        # 无 --local → fetch_candidates 走 GitHub API 直连（容器内可达）
+        _orig_argv = sys.argv[:]
+        sys.argv = ["ingest_candidates"]
         try:
-            import importlib
-            _ingest_mod = importlib.import_module("ingest_candidates")
-            # 用 --local 模式：读数据卷上的 candidates.json（watchdog fetch 落地）
-            import argparse
-            _ingest_ns = argparse.Namespace(local=_cand_path, dry_run=False)
-            _orig_argv = sys.argv[:]
-            sys.argv = ["ingest_candidates", "--local", _cand_path]
-            try:
-                _ingest_rc = _ingest_mod.main()
-                _ingest_result = "rc=%d" % _ingest_rc
-            finally:
-                sys.argv = _orig_argv
-        except Exception as _ie:
-            print(f"[cycle] ingest_candidates 异常(不影响主流程): {_ie}")
-            _ingest_result = "ERROR"
+            _ingest_rc = _ingest_mod.main()
+            _ingest_result = "rc=%d" % _ingest_rc
+        finally:
+            sys.argv = _orig_argv
+    except Exception as _ie:
+        print(f"[cycle] ingest_candidates 异常(不影响主流程): {_ie}")
+        _ingest_result = "ERROR"
 
     F.save_frontier(DATA_DIR, fr)
     z_hist = fr["best_z_history"]

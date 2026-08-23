@@ -2,8 +2,9 @@
 """ingest_candidates.py —— 驾1 摄入驾3 提案候选，过统一闸门后并入 frontier
 
 流程：
-  1. 取驾3 推到 ga-candidates 分支的 candidates.json
-     （git fetch + git show，不触碰工作树；公开仓库无需鉴权）；
+  1. 取驾3 推到 ga-candidates 分支的 candidates.json：
+     容器内无 git/credential，改用 GitHub Contents API（Python urllib 直连，
+     api.github.com 已验证容器内可达，绕过 raw CDN 代理 TLS 失败）；
      也可用 --local <file> 做本地测试/干跑。
   2. 对每条候选，在【完整真实数据】上跑 run_axes.label_axis（分层 null）
      + random_control_label（构造伪结构拦截）。
@@ -19,7 +20,6 @@ import os
 import sys
 import json
 import argparse
-import subprocess
 import datetime
 
 import numpy as np
@@ -29,8 +29,6 @@ import frontier as FR
 import engine_core as E
 
 DATA_DIR = os.environ.get("DATA_DIR", "D:/ssq_evo_data")
-REPO = os.path.dirname(os.path.abspath(__file__))
-BRANCH = "ga-candidates"
 CAND_FILE = "candidates.json"
 GATE_SEED = 20260820
 # 随机对照闸门 surrogate 数（构造伪结构拦截强度，不可弱化）。
@@ -71,18 +69,30 @@ def fetch_candidates(local_path=None):
         except Exception as e:
             print("[ingest] 本地文件读取失败:", e)
             return None
+    # 容器内无 git/credential，改用 GitHub Contents API（Python urllib 直连，
+    # 无需代理、无需 git）。raw.githubusercontent.com 经代理 TLS 握手失败，
+    # 故走 api.github.com（已验证容器内可达 HTTP 200）。
+    api_url = ("https://api.github.com/repos/bbqddt/ssq-evo/contents/"
+               "candidates.json?ref=ga-candidates")
     try:
-        subprocess.run(["git", "fetch", "origin", BRANCH],
-                       cwd=REPO, check=True, capture_output=True)
-    except Exception as e:
-        print("[ingest] git fetch 失败（可能分支尚未创建）:", e)
+        import urllib.request, base64
+        req = urllib.request.Request(api_url, headers={"User-Agent": "ssq-evo-ingest"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            obj = json.loads(resp.read().decode("utf-8"))
+        if obj.get("encoding") == "base64" and obj.get("content"):
+            raw = base64.b64decode("".join(obj["content"].split()))
+            blob = json.loads(raw.decode("utf-8"))
+            # 落盘审计（供主机/看板核对，也兼容旧 --local 下游）
+            try:
+                with open(os.path.join(DATA_DIR, CAND_FILE), "w", encoding="utf-8") as fp:
+                    json.dump(blob, fp, ensure_ascii=False)
+            except Exception:
+                pass
+            return blob
+        print("[ingest] API 返回异常（无 base64 content）")
         return None
-    try:
-        out = subprocess.run(["git", "show", "origin/%s:%s" % (BRANCH, CAND_FILE)],
-                             cwd=REPO, check=True, capture_output=True, text=True).stdout
-        return json.loads(out)
     except Exception as e:
-        print("[ingest] 读取 candidates.json 失败（分支/文件可能不存在）:", e)
+        print("[ingest] GitHub API 拉取失败:", repr(e)[:200])
         return None
 
 
