@@ -31,10 +31,18 @@ def save_frontier(DATA_DIR, f):
 
 
 def update_frontier(frontier, leaderboard, tried_set, elite_k=12):
-    """用本轮结果刷新 frontier：精英(topK by z) + 去重 tried + z 轨迹 + 覆盖度。"""
+    """用本轮结果刷新 frontier：精英(topK by z) + 去重 tried + z 轨迹 + 覆盖度。
+
+    修复: 精英条目现在携带 q/verdict/z（不再丢弃评估数据），
+    以便 breed_from_elites 能区分「真通过闸门的精英」和「仅占 topK 的占位符」。
+    """
     # 精英：按 z 降序取 topK 基因组（z 越大越偏离 surrogate，越值得作为下一轮种子）
     items = sorted(leaderboard.values(), key=lambda e: e.get("z", 0.0), reverse=True)
-    elites = [{"sig": e["sig"], "test": e["test"], "params": e.get("params", {"_sig": {}, "_test": {}})}
+    elites = [{"sig": e["sig"], "test": e["test"],
+              "params": e.get("params", {"_sig": {}, "_test": {}}),
+              "q": e.get("q"),           # 保留评估结果
+              "verdict": e.get("verdict"), # 保留闸门判决
+              "z": e.get("z", 0.0)}       # 保留 z 分数
               for e in items[:elite_k]]
     frontier["elites"] = elites
 
