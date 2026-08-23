@@ -17,6 +17,7 @@ HOST_ONLY_PY = {
     "merge_candidates.py",   # workflow collect 合并 artifact
     "ingest_candidates.py",  # 驾1 摄入候选（宿主机跑）
     "data_refresh.py",       # 生成本地静态快照（宿主机跑）
+    "meta_audit.py",         # 只读元审计（宿主机跑，docker exec 读容器内状态，不进容器）
 }
 
 
