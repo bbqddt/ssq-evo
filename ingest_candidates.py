@@ -149,7 +149,12 @@ def main():
                 print("  [评估异常-跳过] sig=%s test=%s" % (sig, test))
                 continue
             if label == "SURVIVOR" and not artifact:
-                g = {"sig": sig, "test": test, "params": params}
+                # 并入时如实记录裁决（verdict='SURVIVOR' + 闸门 q=p_shuffle），
+                # 让 frontier 精英自证"已过统一闸门"，避免被误判为绕过/空壳。
+                g = {"sig": sig, "test": test, "params": params,
+                     "verdict": "SURVIVOR",
+                     "q": float(p_shuffle) if p_shuffle is not None else None,
+                     "z": 0.0}
                 gkey = E.genome_key(sig, test, params)
                 # 保留已存在精英的 q/verdict/z（绝不因并入提案而剥除评估数据）
                 for ex in f["elites"]:
