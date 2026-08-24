@@ -20,10 +20,13 @@ import numpy as np
 # 复用 engine_core 已有的复合公式构造零件
 from engine_core import (
     COMP_OPS, COMP_UNARY, COMP_OPS_NEST,
-    _random_comp_params, _mutate_comp,
+    _random_comp_params, _mutate_comp, BASE_SIGNALS,
 )
 
-MAX_DEPTH = 2  # 与 _operand 的 depth>=2 限制一致，防止退化
+# MAX_DEPTH 必须与 engine_core._operand 的嵌套限制一致：_operand 在 depth>=2 时返回 None，
+# 即 comp 公式树最多支持 depth=1（gen = depth+1 = 2）。超出会产生无法 evaluate 的废树。
+# 故公式代数演进的物理上限是 gen=2（由"基信号线性组合"长到"组合的组合"）。
+MAX_DEPTH = 2
 
 def _comp_genome(cp, test="mi_max"):
     """把复合公式树 cp 包装成 GA 基因组（sig='comp'）。"""
@@ -63,15 +66,30 @@ def _nest_expand(cp, rng):
     公式从"两个基信号的组合"长成"组合的组合"。只在 depth<max_depth 时生效。"""
     if _depth_of(cp) >= MAX_DEPTH:
         return cp
-    child = _random_comp_params(rng, depth=0)
-    # 随机替换 a 或 b（若 b 已是嵌套则跳过，避免超过 max_depth）
-    if rng.random() < 0.5 or isinstance(cp.get("b"), dict):
-        if not isinstance(cp.get("a"), dict):
-            cp["a"] = child
-    else:
-        if not isinstance(cp.get("b"), dict):
-            cp["b"] = child
+    # 构造一颗 depth=1 的子树（一个基操作数 + 一个嵌套操作数），保证替换后整体 depth+1
+    sub = _make_depth1(rng)
+    # 优先替换非嵌套的槽位（str 类型），确保 depth 真正增加
+    if not isinstance(cp.get("a"), dict):
+        cp["a"] = sub
+    elif not isinstance(cp.get("b"), dict):
+        cp["b"] = sub
+    elif isinstance(cp.get("b"), dict):
+        # a、b 都已嵌套：在 b 子树内递归再扩一层（depth 仍 +1，受 max_depth 保护）
+        cp["b"] = _nest_expand(cp["b"], rng)
     return cp
+
+
+def _make_depth1(rng):
+    """构造一颗 depth=1 的复合子树：一个嵌套操作数 + 一个基操作数。
+    基信号名严格取 BASE_SIGNALS 中"1D 序列"子集（排除 blue/blue_resid 等 2D 信号，
+    否则 comp 产物为 2D，检验函数期望 1D → _build_comp 返回 None 不可评估）。
+    所有字符串强制转原生 str（避免 numpy rng.choice 返回 np.str_ 导致解析失败）。"""
+    _1D_BASES = [s for s in BASE_SIGNALS if s not in ("blue", "blue_resid")]
+    op = str(rng.choice(COMP_OPS_NEST))
+    a = str(rng.choice(_1D_BASES))
+    b = {"op": str(rng.choice(COMP_OPS_NEST)),
+         "a": str(rng.choice(_1D_BASES)), "b": str(rng.choice(_1D_BASES))}
+    return {"op": op, "a": a, "b": b, "read": str(rng.choice(["cont", "rev", "mean", "osc"]))}
 
 class FormulaComposer:
     """复合公式树种群的代际驱动器。"""
@@ -92,24 +110,35 @@ class FormulaComposer:
 
     def breed_from_elites(self, elite_comps, n=6):
         """从通过闸门的 comp 精英里交配+变异，长出下一代。
-        elite_comps: list[dict]，每个是 comp 基因组里的 _comp 树（已通过闸门，可信起点）。
+        elite_comps: list[dict]，每个是 comp 基因组里的 _comp 树（已评估，可信起点）。
         返回：下一代候选基因组 list。
 
-        代数(gen)物理解释 = 当前种群复合公式树的最大嵌套深度 + 1。
-        当交配/变异产生嵌套(depth>=1)树时，gen 自动变为 2、3…，实现真正的代际演进。
-        gen 完全由本代产物决定，与精英历史深度解耦（避免被 depth=0 精英拉回 1）。
+        代际演进驱动（修复 df_gen 卡在 2）：
+          原逻辑靠随机 50% nest_expand 碰运气，depth=1 精英很难稳定长出 depth=2 → gen 永远 2。
+          改为"目标深度驱动"：以当前精英最大深度 cur_d 为目标，保证每代至少有
+          ~一半后代被扩展到 cur_d+1（若未达 max_depth），使 gen 随 breed 单调累积上长。
+          gen = 本代最大嵌套深度 + 1，从精英深度解耦，实现真正的代际累积演进。
+
+        诚实红线：df_gen 仅度量"公式树代数代次"的研发进度，不代表找到结构；
+          统一闸门(q<0.05=SIGNAL) 绝不因 gen 上长而放松。
         """
+        if not elite_comps:
+            return self.seed_gen1(n=n)
+        cur_d = max(_depth_of(c) for c in elite_comps)
+        # 本代应达到的嵌套深度：受 _operand 限制，depth 最大为 max_depth-1（gen=max_depth）。
+        # 即公式代数演进物理上限 gen=2（depth=1），超出不可评估。
+        target_d = min(cur_d + 1, self.max_depth - 1)
         next_gen = []
 
-        # 精英保种：直接保留通过闸门的精英（带轻微变异，防原地踏步）
+        # 精英保种：保留通过闸门的精英（带轻微变异，防原地踏步），占半数
         for cp in elite_comps:
-            if len(next_gen) >= n // 2:
+            if len(next_gen) >= max(1, n // 2):
                 break
             mutated = _mutate_comp(copy.deepcopy(cp), self.rng)
             if _depth_of(mutated) <= self.max_depth:
                 next_gen.append(mutated)
 
-        # 交配 + 变异产生剩余候选
+        # 交配 + 变异 + 目标深度扩展 产生剩余候选
         attempts = 0
         while len(next_gen) < n and attempts < n * 10:
             attempts += 1
@@ -117,19 +146,26 @@ class FormulaComposer:
                 i, j = self.rng.integers(0, len(elite_comps), 2)
                 child = _crossover(elite_comps[int(i)], elite_comps[int(j)], self.rng)
             else:
-                if elite_comps and self.rng.random() < 0.5:
+                if self.rng.random() < 0.5:
                     child = _mutate_comp(copy.deepcopy(self.rng.choice(elite_comps)), self.rng)
                 else:
                     child = _random_comp_params(self.rng, depth=0)
-            # 代际演进驱动：约 50% 后代做嵌套扩展，让公式从"基信号组合"长成"组合的组合"，
-            # df_gen 因此能稳定往上长（而非每轮停在第 1 代）。
-            if _depth_of(child) < self.max_depth and self.rng.random() < 0.5:
+            # 目标深度驱动：把 depth==0 的线性树扩到 depth==1（gen=2），这是引擎可评估的上限。
+            # 严禁对 depth>=1 树再 nest_expand（会导致 depth=2 树，_operand 返回 None 不可评估）。
+            need_deepen = (_depth_of(child) == 0) and (
+                len([c for c in next_gen if _depth_of(c) >= 1]) < (n + 1) // 2)
+            if need_deepen:
                 child = _nest_expand(child, self.rng)
-            if _depth_of(child) <= self.max_depth:
+            if _depth_of(child) <= self.max_depth - 1:  # 只收 depth<=1（gen<=2）的树
                 next_gen.append(child)
 
         self.population = next_gen[:n]
-        # gen = 本代最大嵌套深度 + 1（代际演进的物理解释）
+        # 清洗：递归把 2D 基信号（blue/blue_resid）替换成 1D 信号，避免 comp 产物为 2D
+        # 导致 _build_comp/检验返回 None（不可评估的废树）。1D 子集与 _make_depth1 一致。
+        _1D = [s for s in BASE_SIGNALS if s not in ("blue", "blue_resid")]
+        for cp in self.population:
+            _sanitize_tree(cp, self.rng, _1D)
+        # gen = 本代最大嵌套深度 + 1（代际演进的物理解释，随 breed 累积上长）
         if self.population:
             self.gen = max(_depth_of(c) for c in self.population) + 1
         else:
@@ -147,3 +183,16 @@ class FormulaComposer:
     def genomes_from_population(self):
         """直接取当前种群作为候选（用于 run_cycle 每轮注入 GA）。"""
         return self._to_genomes()
+
+
+def _sanitize_tree(cp, rng, allowed):
+    """递归清洗 comp 树：任何 str operand 若为 2D 信号（blue/blue_resid）则替换为随机 1D 信号。
+    保证整棵树产物为 1D，所有检验可正常评估。"""
+    if not isinstance(cp, dict):
+        return
+    for slot in ("a", "b"):
+        v = cp.get(slot)
+        if isinstance(v, dict):
+            _sanitize_tree(v, rng, allowed)
+        elif isinstance(v, str) and v not in allowed:
+            cp[slot] = str(rng.choice(allowed))

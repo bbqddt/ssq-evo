@@ -247,7 +247,14 @@ def apply_comp(op, a, b, k):
         safe = np.where(np.abs(b) < 1e-9, 1e-9, b)
         return np.where(np.abs(b) < 1e-9, 0.0, a / safe)
     if op == "diff":
-        out = np.empty_like(a); out[0] = np.nan; out[1:] = np.diff(a); return out
+        # 兼容 2D 基信号（如 red_gap_* / vector_* 返回矩阵）：沿最后一轴差分，形状与 out[1:] 对齐
+        d = np.diff(np.asarray(a, float), axis=-1)
+        out = np.empty_like(a, float); out[..., 0] = np.nan
+        if out.ndim >= 2:
+            out[..., 1:] = d
+        else:
+            out[1:] = d
+        return out
     if op == "z":
         return (a - np.nanmean(a)) / (np.nanstd(a) + 1e-12)
     if op == "lag":
