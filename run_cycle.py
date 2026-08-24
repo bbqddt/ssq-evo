@@ -457,16 +457,22 @@ def main():
                     and isinstance(g.get("params", {}).get("_comp"), dict)
                     and g.get("q") is not None]  # 必须有评估数据（非空壳精英）
     composer = FC.FormulaComposer(rng, start_gen=int(fr.get("df_gen", 1) or 1))
+    # 注入跨轮保种槽：上一轮产出的 comp 树（即便未进 frontier.elites 也保留），
+    # 确保"长出来的公式真进下一轮参与计算"，杜绝每轮随机重启。
+    _persisted = fr.get("comp_elites", [])
+    if _persisted:
+        composer.load_persisted(int(fr.get("comp_elites_gen", fr.get("df_gen", 1)) or 1), _persisted)
+        print(f"[composer] 载入跨轮保种槽 {len(_persisted)} 棵 comp 树(gen={composer.gen})，续代参与")
     if _comp_elites:
         _comp_genomes = composer.breed_from_elites(_comp_elites, n=cfg.get("comp_breed_n", 8))
         print(f"[composer] 从 {len(_comp_elites)} 个「已评估」comp 精英交配变异，长出第 {composer.gen} 代 {len(_comp_genomes)} 候选")
     else:
-        # 无已评估 comp 精英时启动第 1 代随机复合公式（空壳精英不参与 breeding）
-        _n_empty = sum(1 for g in elite_seeds if g.get("sig") == "comp" and g.get("q") is None)
-        if _n_empty:
-            print(f"[composer] 有 {_n_empty} 个空壳 comp 精英(q=None) 被跳过，启动第 {composer.gen} 代随机复合公式")
-        _comp_genomes = composer.seed_gen1(n=cfg.get("comp_breed_n", 8))
-        print(f"[composer] 启动第 {composer.gen} 代随机复合公式 {len(_comp_genomes)} 候选")
+        # 无已评估 comp 精英时：优先用保种槽续代；保种槽空才启动第 1 代随机
+        _comp_genomes = composer.breed_from_elites([], n=cfg.get("comp_breed_n", 8))
+        if composer._persisted:
+            print(f"[composer] 无已评估精英，从保种槽续代长出第 {composer.gen} 代 {len(_comp_genomes)} 候选")
+        else:
+            print(f"[composer] 启动第 {composer.gen} 代随机复合公式 {len(_comp_genomes)} 候选")
 
     # 把 composer 产出的 comp 候选作为精英种子并入 GA（统一闸门裁决，不旁路）
     elite_seeds = (list(elite_seeds) + _comp_genomes)
@@ -717,6 +723,14 @@ def main():
     # 公式代数代次持久化（跨轮继承，让 df_gen 真实增长而非每轮重启）
     fr["df_gen"] = int(composer.gen)
     fr["df_added_last"] = int(df_added)
+    # 跨轮保种槽：把本轮回合 composer 产出的 comp 树原样存回，供下一轮 load_persisted 续代。
+    # 这是"长出来的公式必须参与下一轮计算"的落地——不再因 frontier.elites 按 z 截断而丢失，
+    # 确保演进是连续累积而非每轮随机重启。
+    _comp_trees = [g.get("params", {}).get("_comp") for g in _comp_genomes
+                   if g.get("sig") == "comp" and isinstance(g.get("params", {}).get("_comp"), dict)]
+    if _comp_trees:
+        fr["comp_elites"] = _comp_trees
+        fr["comp_elites_gen"] = int(composer.gen)
 
     # 5.5. 摄入驾3 CI 分布式 GA 提案（ga-candidates 分支）
     #     容器内无 git/credential，ingest_candidates 改用 GitHub Contents API 直连，

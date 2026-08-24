@@ -219,10 +219,17 @@ def _inpaint(x):
     x[:first] = x[first]; x[last + 1:] = x[last]
     return x
 
+_MAX_COMP_DEPTH = 4  # 复合公式树最大嵌套深度（防退化/爆炸）。gen 上限 = _MAX_COMP_DEPTH+1。
+
 def _operand(spec, reds, blues, depth, base=None):
-    """spec 可以是 基信号名(str) 或 嵌套复合(dict)。返回长度 N 数组或 None。"""
+    """spec 可以是 基信号名(str) 或 嵌套复合(dict)。返回长度 N 数组或 None。
+
+    深度放开：原 depth>=2 硬拒导致 df_gen 物理上限=2（gen=2），公式树无法长出更复杂结构。
+    现允许深度到 _MAX_COMP_DEPTH（gen 上限=_MAX_COMP_DEPTH+1=5）。所有 apply_comp op 均返回
+    与 a 同形状数组（逐元素或保长时序），对"嵌套产物仍是 1D 序列"安全；唯一风险是退化树，
+    由 _build_comp 的 isfinite 校验兜底（产物非有限即返回 None）。"""
     if isinstance(spec, dict):
-        if depth >= 2:
+        if depth >= _MAX_COMP_DEPTH:
             return None
         return _build_comp(spec, reds, blues, depth + 1, base)
     if isinstance(spec, str) and spec in BASE_SIGNALS:
@@ -292,8 +299,9 @@ def _random_comp_params(rng, depth=0):
     op = rng.choice(COMP_OPS + COMP_UNARY)
     cp = {"op": op, "a": rng.choice(BASE_SIGNALS),
           "b": rng.choice(BASE_SIGNALS), "k": int(rng.integers(1, 6))}
-    # 一层嵌套：二元/幂算子且较浅时，b 有概率变成子复合(公式复合套复合)
-    if depth < 1 and op in COMP_OPS_NEST and rng.random() < 0.25:
+    # 多层嵌套：二元/幂算子且未达深度上限时，b 有概率变成子复合(公式复合套复合)，
+    # 让随机公式树能自然长出更深结构（gen 上限由 _MAX_COMP_DEPTH 约束）。
+    if depth < _MAX_COMP_DEPTH - 1 and op in COMP_OPS_NEST and rng.random() < 0.4:
         cp["b"] = _random_comp_params(rng, depth + 1)
     # 读取规则：公式定义"如何把它读成方向预测"(让准确率掌握在公式上，而非写死延续/反转)
     cp["read"] = rng.choice(["cont", "rev", "mean", "osc"])
@@ -310,7 +318,11 @@ def _mutate_comp(cp, rng, depth=0):
         if isinstance(ncp.get("b"), dict):
             ncp["b"] = _mutate_comp(ncp["b"], rng, depth + 1)
         else:
-            ncp["b"] = rng.choice(BASE_SIGNALS)
+            # 变异时也可能把基操作数升级成嵌套子树（深度未达上限时），推动结构变复杂
+            if depth < _MAX_COMP_DEPTH - 1 and rng.random() < 0.3:
+                ncp["b"] = _random_comp_params(rng, depth + 1)
+            else:
+                ncp["b"] = rng.choice(BASE_SIGNALS)
     else:
         ncp["k"] = int(max(1, min(10, cp.get("k", 1) + int(rng.choice([-1, 1])))))
     if rng.random() < 0.2:
@@ -322,7 +334,11 @@ def _build_x(sig_name, reds, blues, params):
     params = params or {}
     if sig_name == "comp":
         cp = params.get("_comp")
-        if not cp or not isinstance(cp, dict) or cp.get("a") not in BASE_SIGNALS:
+        if not cp or not isinstance(cp, dict):
+            return None
+        # 放行嵌套子树：a 可以是 dict（嵌套复合），由 _build_comp 递归构造。
+        # 仅校验顶层 op 合法 + a/b 存在，不再要求 a 必须是基信号名（depth>=2 时 a 是子树）。
+        if cp.get("op") is None or "a" not in cp:
             return None
         return _build_comp(cp, reds, blues)
     sp = params.get("_sig", {})

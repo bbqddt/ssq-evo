@@ -23,10 +23,10 @@ from engine_core import (
     _random_comp_params, _mutate_comp, BASE_SIGNALS,
 )
 
-# MAX_DEPTH 必须与 engine_core._operand 的嵌套限制一致：_operand 在 depth>=2 时返回 None，
-# 即 comp 公式树最多支持 depth=1（gen = depth+1 = 2）。超出会产生无法 evaluate 的废树。
-# 故公式代数演进的物理上限是 gen=2（由"基信号线性组合"长到"组合的组合"）。
-MAX_DEPTH = 2
+# MAX_DEPTH 与 engine_core._MAX_COMP_DEPTH 对齐：_operand 现允许 depth 到 _MAX_COMP_DEPTH(=4)，
+# 即 comp 公式树最多支持 depth=3（gen = depth+1 = 4）。超出(_operand depth>=4)返回 None 不可评估。
+# 公式代数演进的物理上限从 gen=2 放开到 gen=4（"基信号组合"→"组合的组合"→"组合的组合的组合"）。
+MAX_DEPTH = 4
 
 def _comp_genome(cp, test="mi_max"):
     """把复合公式树 cp 包装成 GA 基因组（sig='comp'）。"""
@@ -80,16 +80,32 @@ def _nest_expand(cp, rng):
 
 
 def _make_depth1(rng):
-    """构造一颗 depth=1 的复合子树：一个嵌套操作数 + 一个基操作数。
+    """构造一颗深度可达 max_depth-1 的复合子树（默认 depth=1，但 b 可再嵌套）。
     基信号名严格取 BASE_SIGNALS 中"1D 序列"子集（排除 blue/blue_resid 等 2D 信号，
     否则 comp 产物为 2D，检验函数期望 1D → _build_comp 返回 None 不可评估）。
     所有字符串强制转原生 str（避免 numpy rng.choice 返回 np.str_ 导致解析失败）。"""
     _1D_BASES = [s for s in BASE_SIGNALS if s not in ("blue", "blue_resid")]
-    op = str(rng.choice(COMP_OPS_NEST))
-    a = str(rng.choice(_1D_BASES))
-    b = {"op": str(rng.choice(COMP_OPS_NEST)),
-         "a": str(rng.choice(_1D_BASES)), "b": str(rng.choice(_1D_BASES))}
-    return {"op": op, "a": a, "b": b, "read": str(rng.choice(["cont", "rev", "mean", "osc"]))}
+
+    def _leaf():
+        return str(rng.choice(_1D_BASES))
+
+    def _sub(d=1):
+        if d >= MAX_DEPTH - 1:
+            # 到达深度上限：b 用基信号叶，不再嵌套
+            b = _leaf()
+        else:
+            # 有概率继续嵌套，让子树更深
+            if rng.random() < 0.5:
+                b = {"op": str(rng.choice(COMP_OPS_NEST)),
+                     "a": _leaf(), "b": _sub(d + 1),
+                     "read": str(rng.choice(["cont", "rev", "mean", "osc"]))}
+            else:
+                b = _leaf()
+        return {"op": str(rng.choice(COMP_OPS_NEST)),
+                "a": _leaf(), "b": b,
+                "read": str(rng.choice(["cont", "rev", "mean", "osc"]))}
+
+    return _sub(1)
 
 class FormulaComposer:
     """复合公式树种群的代际驱动器。"""
@@ -100,38 +116,48 @@ class FormulaComposer:
         self.max_depth = max_depth
         self.tests = list(tests)
         self.population = []                   # 当前代公式树列表（dict）
+        self._persisted = []                   # 跨轮保种槽注入的树（来自 fr["comp_elites"]）
+
+    def load_persisted(self, gen, trees):
+        """注入上轮保种槽的 comp 树（确保"长出来的公式真进下一轮参与计算"）。
+        gen: 保种槽记录的代数；trees: list[dict] 公式树。"""
+        if trees:
+            self._persisted = [copy.deepcopy(t) for t in trees if isinstance(t, dict)]
+            self.gen = max(self.gen, int(gen or 1))
 
     def seed_gen1(self, n=6):
-        """第 1 代：纯随机复合公式（不依赖任何精英，启动演进）。"""
+        """第 1 代：纯随机复合公式（仅当没有任何精英/保种可用时启动演进）。"""
         self.population = [_random_comp_params(self.rng, depth=0) for _ in range(n)]
         # gen = 本代最大嵌套深度 + 1
         self.gen = max(_depth_of(c) for c in self.population) + 1
         return self._to_genomes()
 
     def breed_from_elites(self, elite_comps, n=6):
-        """从通过闸门的 comp 精英里交配+变异，长出下一代。
-        elite_comps: list[dict]，每个是 comp 基因组里的 _comp 树（已评估，可信起点）。
+        """从 comp 精英(已评估带q) + 跨轮保种槽 交配+变异，长出下一代。
+        elite_comps: list[dict]，comp 基因组里的 _comp 树（已评估，可信起点）。
         返回：下一代候选基因组 list。
 
-        代际演进驱动（修复 df_gen 卡在 2）：
-          原逻辑靠随机 50% nest_expand 碰运气，depth=1 精英很难稳定长出 depth=2 → gen 永远 2。
-          改为"目标深度驱动"：以当前精英最大深度 cur_d 为目标，保证每代至少有
-          ~一半后代被扩展到 cur_d+1（若未达 max_depth），使 gen 随 breed 单调累积上长。
-          gen = 本代最大嵌套深度 + 1，从精英深度解耦，实现真正的代际累积演进。
+        代际演进驱动（修复 df_gen 锁死 + 让长出的公式真参与计算）：
+          - 优先用「已评估带q的精英」；若无，则回退到「跨轮保种槽」(上一轮产出的 comp 树)，
+            确保 breed 永远从真实历史公式续代，绝不每轮随机重启(seed_gen1)。
+          - 目标深度驱动：以当前可用树最大深度 cur_d 为目标，稳定把后代推到 cur_d+1
+            （受 max_depth-1 限制），gen 随 breed 单调累积上长。
 
         诚实红线：df_gen 仅度量"公式树代数代次"的研发进度，不代表找到结构；
           统一闸门(q<0.05=SIGNAL) 绝不因 gen 上长而放松。
         """
-        if not elite_comps:
+        # 合并精英树 + 保种槽树作为 breed 起点（保种槽保证跨轮连续性）
+        sources = list(elite_comps) + list(self._persisted)
+        if not sources:
             return self.seed_gen1(n=n)
-        cur_d = max(_depth_of(c) for c in elite_comps)
+        cur_d = max(_depth_of(c) for c in sources)
         # 本代应达到的嵌套深度：受 _operand 限制，depth 最大为 max_depth-1（gen=max_depth）。
-        # 即公式代数演进物理上限 gen=2（depth=1），超出不可评估。
+        # 物理上限从 gen=2 放开到 gen=4（depth=3），让公式树长更复杂结构。
         target_d = min(cur_d + 1, self.max_depth - 1)
         next_gen = []
 
-        # 精英保种：保留通过闸门的精英（带轻微变异，防原地踏步），占半数
-        for cp in elite_comps:
+        # 精英/保种保种：保留起点（带轻微变异，防原地踏步），占半数
+        for cp in sources:
             if len(next_gen) >= max(1, n // 2):
                 break
             mutated = _mutate_comp(copy.deepcopy(cp), self.rng)
@@ -142,21 +168,21 @@ class FormulaComposer:
         attempts = 0
         while len(next_gen) < n and attempts < n * 10:
             attempts += 1
-            if len(elite_comps) >= 2 and self.rng.random() < 0.6:
-                i, j = self.rng.integers(0, len(elite_comps), 2)
-                child = _crossover(elite_comps[int(i)], elite_comps[int(j)], self.rng)
+            if len(sources) >= 2 and self.rng.random() < 0.6:
+                i, j = self.rng.integers(0, len(sources), 2)
+                child = _crossover(sources[int(i)], sources[int(j)], self.rng)
             else:
                 if self.rng.random() < 0.5:
-                    child = _mutate_comp(copy.deepcopy(self.rng.choice(elite_comps)), self.rng)
+                    child = _mutate_comp(copy.deepcopy(self.rng.choice(sources)), self.rng)
                 else:
                     child = _random_comp_params(self.rng, depth=0)
-            # 目标深度驱动：把 depth==0 的线性树扩到 depth==1（gen=2），这是引擎可评估的上限。
-            # 严禁对 depth>=1 树再 nest_expand（会导致 depth=2 树，_operand 返回 None 不可评估）。
-            need_deepen = (_depth_of(child) == 0) and (
-                len([c for c in next_gen if _depth_of(c) >= 1]) < (n + 1) // 2)
-            if need_deepen:
+            # 目标深度驱动：把 depth==0 的线性树扩到 depth==1，已嵌套的保持并可能再扩，
+            # 直到达到 target_d（受 max_depth 保护，绝不产生不可评估的废树）。
+            while _depth_of(child) < target_d and _depth_of(child) < self.max_depth - 1:
                 child = _nest_expand(child, self.rng)
-            if _depth_of(child) <= self.max_depth - 1:  # 只收 depth<=1（gen<=2）的树
+                if _depth_of(child) >= self.max_depth - 1:
+                    break
+            if _depth_of(child) <= self.max_depth - 1:  # 只收 depth<=3（gen<=4）的树
                 next_gen.append(child)
 
         self.population = next_gen[:n]
