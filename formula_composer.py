@@ -156,8 +156,10 @@ class FormulaComposer:
         target_d = min(cur_d + 1, self.max_depth - 1)
         next_gen = []
 
-        # 精英/保种保种：保留起点（带轻微变异，防原地踏步），占半数
-        for cp in sources:
+        # 保种/精英保种：优先保留深度最大的树（让复杂结构主导续代，避免 depth=0 线性树
+        # 原样续代稀释演进），深度降序排列后取前半数（带轻微变异，防原地踏步）。
+        _src_sorted = sorted(sources, key=_depth_of, reverse=True)
+        for cp in _src_sorted:
             if len(next_gen) >= max(1, n // 2):
                 break
             mutated = _mutate_comp(copy.deepcopy(cp), self.rng)

@@ -934,6 +934,7 @@ def main():
         "artifact_prone_n": len(prone), "artifact_prone": sorted(prone),
         "n_eval": len(all_evals), "n_unique": len(leaderboard),
         "coverage": fr["coverage"], "elite_count": len(fr["elites"]),
+        "df_gen": df_gen, "df_added": df_added, "df_gen_source": _gen_source,
         "pick_red_excess": (pick["red_excess"] if pick else None),
         "pick_blue_excess": (pick["blue_excess"] if pick else None),
         "pick_p": (pick["pick_p"] if pick else None),
