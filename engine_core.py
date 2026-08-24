@@ -1685,8 +1685,37 @@ class Evolution:
                     self.all_evals.append(ev)
                     if key not in self.leaderboard or ev["p_raw"] < self.leaderboard[key]["p_raw"]:
                         self.leaderboard[key] = ev
-                # 选择：按本基因组最优 p_raw 取前 50%
-                evals_sorted = sorted(evals, key=lambda e: self.leaderboard[e["gkey"]]["p_raw"]) if evals else []
+                # 选择：复合适应度 = 结构显著性(p_raw) + OOS方向命中率(用户要的"准确率")
+                # 设计（防过拟合红线）：
+                #  - p_raw 主防"构造伪结构"，命中率导向真实可预测性，二者缺一不可；
+                #  - 仅对 comp 基因组算轻量 OOS(frac=0.15,k_sur=15)，成本可控(只对当轮候选算)；
+                #  - above_random=False 的 comp 候选命中率贡献归零(不奖励随机波动命中)；
+                #  - 基信号不参与命中率奖励(其命中率是数据自带惯性,非公式功劳,避免 GA 退化为堆基信号)。
+                _hit_cache = {}
+                for e in evals:
+                    ek = e["gkey"]
+                    lb = self.leaderboard[ek]
+                    if lb.get("sig") == "comp":
+                        try:
+                            _acc = oos_accuracy(lb, self.reds, self.blues, self.rng,
+                                               frac=0.15, k_sur=15)
+                        except Exception:
+                            _acc = None
+                        if _acc is not None:
+                            _hit_cache[ek] = _acc
+                            lb["hit_rate"] = _acc["hit_rate"]
+                            lb["above_random"] = _acc["above_random"]
+
+                def _fitness(e):
+                    lb = self.leaderboard[e["gkey"]]
+                    p = lb.get("p_raw", 1.0)
+                    if lb.get("sig") == "comp":
+                        h = _hit_cache.get(e["gkey"])
+                        hr = h["hit_rate"] if (h and h.get("above_random")) else 0.0
+                        return (1.0 - p) * 0.5 + hr * 0.5
+                    return 1.0 - p  # 基信号: 仅按结构显著性
+
+                evals_sorted = sorted(evals, key=_fitness, reverse=True) if evals else []
                 survivors = evals_sorted[:max(2, len(evals_sorted) // 2)]
                 base_pool = survivors if survivors else [self._safe_random_genome(self.rng) for _ in range(2)]
                 newpop = [{"sig": g["sig"], "test": g["test"],

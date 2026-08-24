@@ -452,10 +452,17 @@ def main():
     # 从 frontier 精英里提取「通过闸门的」comp 复合公式树（必须有 q/verdict，
     # 不能是 frontier.py 旧版丢弃评估数据后的空壳精英），用 FormulaComposer 交配+变异
     # 长出下一代候选，作为精英种子并入 GA（统一闸门）。让 df_gen 真正等于组合代数代次。
-    _comp_elites = [g.get("params", {}).get("_comp") for g in elite_seeds
-                    if g.get("sig") == "comp"
-                    and isinstance(g.get("params", {}).get("_comp"), dict)
-                    and g.get("q") is not None]  # 必须有评估数据（非空壳精英）
+    # 提取「已评估」comp 精英；优先 above_random(方向命中率显著高于随机)的树进 breed，
+    # 让"准确率导向"驱动下一代演进（而非只按 q 显著性）。命中率字段由 GA 内部轻量 OOS 写入。
+    _comp_elites_all = [g for g in elite_seeds
+                        if g.get("sig") == "comp"
+                        and isinstance(g.get("params", {}).get("_comp"), dict)
+                        and g.get("q") is not None]
+    _comp_elites = [g.get("params", {}).get("_comp") for g in _comp_elites_all
+                    if g.get("above_random")]
+    if not _comp_elites:
+        # 无 above_random 时退化用全部已评估 comp（保证续代不断档）
+        _comp_elites = [g.get("params", {}).get("_comp") for g in _comp_elites_all]
     composer = FC.FormulaComposer(rng, start_gen=int(fr.get("df_gen", 1) or 1))
     # 注入跨轮保种槽：上一轮产出的 comp 树（即便未进 frontier.elites 也保留），
     # 确保"长出来的公式真进下一轮参与计算"，杜绝每轮随机重启。
