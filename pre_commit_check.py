@@ -18,6 +18,8 @@ HOST_ONLY_PY = {
     "ingest_candidates.py",  # 驾1 摄入候选（宿主机跑）
     "data_refresh.py",       # 生成本地静态快照（宿主机跑）
     "meta_audit.py",         # 只读元审计（宿主机跑，docker exec 读容器内状态，不进容器）
+    "evolve_predictor.py",   # 公式演进实验脚本（本机8核/CI runner 跑，不属 Docker 引擎镜像）
+    "merge_evo_proposals.py",# 分布式 evolve 的 artifact 合并（workflow 跑，不进容器）
 }
 
 

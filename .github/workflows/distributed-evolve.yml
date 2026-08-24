@@ -1,0 +1,59 @@
+name: distributed-evolve
+# 免费云端分布式进化：把候选搜索分片给 8 个 runner 并行评估，结果回流 ga-candidates 分支。
+# 算力来源：GitHub Actions 公开仓库免费分钟（即「驾3」已连的云端）。
+# 数据来源：仓库静态快照 data/ssq_history.csv（先在本机跑 data_refresh.py 生成并 commit）。
+# 注意：不会自动激活——写好后在 GitHub 仓库 Actions 页手动启用，或等 cron 触发。
+on:
+  schedule:
+    - cron: "17 */6 * * *"      # 每 6 小时（北京时间约 03:17/09:17/15:17/21:17）
+  workflow_dispatch:
+jobs:
+  evolve:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install numpy
+      - name: 跑进化（该 seed 独立搜索）
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          python evolve_predictor.py evolve --generations 25 --pop 30 --workers 2 \
+            --data data/ssq_history.csv --out proposal_${{ matrix.seed }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proposal-${{ matrix.seed }}
+          path: proposal_${{ matrix.seed }}.json
+          if-no-files-found: ignore
+  merge:
+    needs: evolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ga-candidates
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install numpy
+      - run: python merge_evo_proposals.py --artifacts artifacts --out evo_proposals.json
+      - name: 提交提案到 ga-candidates
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "github-actions"
+          git add evo_proposals.json
+          git diff --cached --quiet || git commit -m "evo proposals $(date -u +%Y%m%dT%H%M)"
+          git push origin ga-candidates

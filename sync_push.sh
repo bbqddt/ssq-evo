@@ -16,7 +16,7 @@ PROXY="http://127.0.0.1:10808/"
 EMPTY="$(mktemp 2>/dev/null || echo /tmp/empty_gitconfig)"
 : > "$EMPTY"   # 空文件，用于隔离系统级 helper-selector
 
-GIT=(git -c "http.proxy=$PROXY" -c http.sslVerify=false -c http.schannelCheckRevoke=false -c credential.helper=wincred)
+GIT=(git -c "http.proxy=$PROXY" -c http.sslVerify=false -c http.schannelCheckRevoke=false -c http.sslBackend=openssl -c credential.helper=wincred)
 
 # 1) 先拉远端（GitHub Actions 每轮会回写数据），rebase 保持线性历史
 echo "==> pull --rebase (sync from Actions)"
