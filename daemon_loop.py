@@ -16,7 +16,7 @@ daemon_loop.py —— 7x24 常驻循环（配合 nssm 注册为 Windows 服务�
 
 启动：python daemon_loop.py
 """
-import os, sys, time, subprocess, json, errno, atexit
+import os, sys, time, subprocess, json, errno, atexit, threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -119,28 +119,50 @@ def _log(msg):
 
 
 def run_cycle_subprocess(py):
-    """运行一轮 run_cycle，逐行实时落盘子进程输出（修复 Docker 日志黑洞）。"""
+    """运行一轮 run_cycle，逐行实时落盘子进程输出（修复 Docker 日志黑洞）。
+
+    ⚠️ 关键修复（生产事故根因）：原实现用
+        for raw_line in iter(proc.stdout.readline, b""):
+            ...
+        proc.wait(timeout=1800)
+    读取循环会一直阻塞到 run_cycle 关闭 stdout（即子进程退出）才执行 proc.wait，
+    导致「单轮 30min 强杀」对卡死/超慢的 run_cycle 完全失效——守护进程死等子进程，
+    永不触发杀进程重启。2026-08-25 实测：run_cycle 卡死 8h 无人强杀，state.json 陈旧 21h。
+    现改用独立读取线程排空 stdout + 主线程 proc.wait(timeout) 真正生效的超时强杀。
+    """
     log_path = os.path.join(DATA_DIR, "daemon.log")
+    proc = subprocess.Popen(
+        [py, "-u", os.path.join(HERE, "run_cycle.py")],
+        cwd=HERE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        bufsize=1,  # line-buffered
+    )
+
+    def _reader():
+        try:
+            with open(log_path, "a", encoding="utf-8") as lf:
+                for raw_line in iter(proc.stdout.readline, b""):
+                    lf.write(raw_line.decode("utf-8", errors="replace"))
+                    lf.flush()
+        except Exception:
+            pass
+
+    rt = threading.Thread(target=_reader, daemon=True)
+    rt.start()
     try:
-        proc = subprocess.Popen(
-            [py, "-u", os.path.join(HERE, "run_cycle.py")],
-            cwd=HERE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            bufsize=1,  # line-buffered
-        )
-        with open(log_path, "a", encoding="utf-8") as lf:
-            for raw_line in iter(proc.stdout.readline, b""):
-                line = raw_line.decode("utf-8", errors="replace")
-                lf.write(line)
-                lf.flush()
-        proc.wait(timeout=1800)  # 单轮最长 30min 防死循环
+        proc.wait(timeout=2700)  # 单轮最长 45min 防死循环(原30min因读取阻塞从未生效; 放宽容许重 GA)
         rc = proc.returncode
     except subprocess.TimeoutExpired:
         proc.kill()
-        _log("[daemon] cycle 超时(30min), 已强杀")
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            pass
+        _log("[daemon] cycle 超时(45min), 已强杀并重启")
         rc = -1
     except Exception as e:
         _log(f"[daemon] cycle 异常: {e}")
         rc = -1
+    rt.join(timeout=5)
     regen_dashboard(py)   # 每轮结束(无论成败)重建 CloudStudio 看板, 保证对外监控始终最新
     run_ingest_subprocess(py)  # 摄入驾3云端提案(ga-candidates), 过统一闸门后并入 frontier
     run_failure_absorber_subprocess(py)  # L1 失败吸收器: 吃驾1 state+驾3 fate, 落 avoidance_prior 回馈三驾车
