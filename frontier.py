@@ -15,19 +15,43 @@ def load_frontier(DATA_DIR):
     if os.path.exists(p):
         try:
             f = json.load(open(p, encoding="utf-8"))
+        except Exception as e:
+            # JSON 损坏（可能被 45min 强杀截断）→ 备份坏文件 + 告警
+            bad = p + ".corrupt"
+            if not os.path.exists(bad):
+                try:
+                    import shutil
+                    shutil.copy2(p, bad)
+                except Exception:
+                    pass
+            print(f"[frontier] CRITICAL: frontier.json 损坏({e})，备份到 {bad}，从空 frontier 重启")
+            f = None
+        if f is not None:
             f.setdefault("elites", [])
             f.setdefault("tried", [])
             f.setdefault("best_z_history", [])
             f.setdefault("coverage", 0)
+            f.setdefault("footprints", [])   # evolve_predictor 脚印
+            f.setdefault("gen", 0)
+            f.setdefault("cycles_since_signal", 0)
             return f
-        except Exception:
-            pass
-    return {"elites": [], "tried": [], "best_z_history": [], "coverage": 0}
+    return {"elites": [], "tried": [], "best_z_history": [], "coverage": 0,
+            "footprints": [], "gen": 0, "cycles_since_signal": 0}
 
 
 def save_frontier(DATA_DIR, f):
-    json.dump(f, open(os.path.join(DATA_DIR, "frontier.json"), "w", encoding="utf-8"),
-              ensure_ascii=False, indent=2)
+    p = os.path.join(DATA_DIR, "frontier.json")
+    tmp = p + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(f, fh, ensure_ascii=False, indent=2)
+        fh.flush()
+        os.fsync(fh.fileno())
+        os.replace(tmp, p)
+    except Exception:
+        json.dump(f, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 def update_frontier(frontier, leaderboard, tried_set, elite_k=12):

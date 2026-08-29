@@ -26,8 +26,9 @@ from datetime import datetime, timezone
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-AUDIT_LEDGER = os.path.join(HERE, "audit_ledger.json")
-PROD_CANDIDATES = os.path.join(HERE, "production_candidates.json")
+_DATA_DIR = os.environ.get("DATA_DIR", HERE)
+AUDIT_LEDGER = os.path.join(_DATA_DIR, "audit_ledger.json")
+PROD_CANDIDATES = os.path.join(_DATA_DIR, "production_candidates.json")
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +40,13 @@ def code_version():
                              capture_output=True, text=True, timeout=10)
         if out.returncode == 0 and out.stdout.strip():
             return out.stdout.strip()[:12]
+    except Exception:
+        pass
+    # 容器内无 git → 回退读 Dockerfile 注入的 build_info.txt
+    try:
+        bf = os.path.join(HERE, "build_info.txt")
+        if os.path.isfile(bf):
+            return open(bf).read().strip()[:12]
     except Exception:
         pass
     return "unknown"

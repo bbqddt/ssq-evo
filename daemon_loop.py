@@ -343,11 +343,16 @@ def main():
     py = sys.executable
 
     # ── 调度模式解析 ────────────────────────────────────────────────
+    # 兜底初值（防止 CYCLE_MINUTES="" 或非法值时 UnboundLocalError）
+    mode = "continuous"
+    label = "连续(60s冷却)"
+
     env_min = os.environ.get("CYCLE_MINUTES")
-    if env_min is not None:
+    if env_min and env_min.strip():
         try:
-            minutes = float(env_min)
+            minutes = float(env_min.strip())
         except ValueError:
+            _log(f"[daemon] WARNING: CYCLE_MINUTES='{env_min}' 非法，回退配置模式")
             minutes = None
         if minutes is not None:
             if minutes <= 0:

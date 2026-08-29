@@ -1896,9 +1896,9 @@ class Evolution:
                     _novelty_cache = {}
                     for e in evals:
                         try:
-                            fp = NS.behavior_fp(e, self.reds, self.blues)
-                            _novelty_cache[e["gkey"]] = fp
-                            self.novelty_archive.add(fp, {"gkey": e["gkey"],
+                            _bfp = NS.behavior_fp(e, self.reds, self.blues)  # 行为指纹，不覆盖数据指纹 fp
+                            _novelty_cache[e["gkey"]] = _bfp
+                            self.novelty_archive.add(_bfp, {"gkey": e["gkey"],
                                                            "sig": e.get("sig"),
                                                            "test": e.get("test")})
                         except Exception:

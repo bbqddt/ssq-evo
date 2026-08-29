@@ -37,6 +37,25 @@ MASTER = os.path.join(DATA_DIR, "ssq_master.csv")
 DB = os.path.join(DATA_DIR, "ssq_evo.db")
 STATE = os.path.join(DATA_DIR, "state.json")
 
+
+def atomic_write_json(path, obj):
+    """原子写 JSON：先写 .tmp → os.replace() 原子替换。
+    防止 45min 强杀截断导致文件损坏（daemon_loop.py:152 proc.kill()）。
+    """
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+        os.replace(tmp, path)  # POSIX/Windows 均原子
+    except Exception:
+        # 回退非原子写（兼容性兜底）
+        json.dump(obj, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+        if os.path.exists(tmp):
+            os.remove(tmp)
+STATE = os.path.join(DATA_DIR, "state.json")
+
 # ---- 可调参数（部署时可改 config.json）----
 DEFAULT_CFG = {
     "epochs": 8, "pop": 30, "k_light": 25, "k_heavy": 10,  # pop/epochs 适度提高：进程池提速后，把释放的算力用于更深搜索
@@ -1004,7 +1023,7 @@ def main():
         "ts": sc_result["ts"],
     }
 
-    json.dump(state, open(STATE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    atomic_write_json(STATE, state)
 
     # 8b. 滚动快照（防坏 state 丢历史；保留最近 20 个，避免磁盘膨胀）
     import shutil

@@ -574,6 +574,7 @@ def evolve(generations=20, pop=20, seed=20260823, workers=0, data=None, out=None
     if conf_mean_z > 2:
         fp = {"spec": best_spec, "kfold_z": scored[0][0], "train_z": train_z,
               "surrogate_z": sur_z, "confirm_mean_z": conf_mean_z,
+              "confirm_z": conf_mean_z,  # 统一键名：predict/verify 都读此键
               "confirm_zs": conf_zs,
               "added_ts": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
               "gen": fr["gen"] + 1, "online": True}

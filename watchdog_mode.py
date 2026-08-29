@@ -22,7 +22,7 @@ def effective_cfg(cfg, frontier):
     if paused:
         cfg["pop"] = 1
         cfg["epochs"] = 1
-        cfg["comp_breed_n"] = 0
+        cfg["comp_breed_n"] = 1   # 保留最小繁育能力（压到0会导致seed_gen1(n=0) ValueError）
     return cfg, paused
 
 
@@ -39,7 +39,8 @@ def update_stagnation(frontier, has_signal):
 
 def is_watchdog_paused(frontier, cfg):
     """判断是否应进入守夜人模式（连续全 NULL 超过阈值）。"""
-    threshold = cfg.get("watchdog_stagnation_threshold", _STAGNATION_THRESHOLD)
+    # 兼容两种键名：run_cycle 用 watchdog_stagnation_cycles，本模块用 _threshold
+    threshold = cfg.get("watchdog_stagnation_cycles") or cfg.get("watchdog_stagnation_threshold", _STAGNATION_THRESHOLD)
     return frontier.get("cycles_since_signal", 0) >= threshold
 
 

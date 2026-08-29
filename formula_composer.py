@@ -135,9 +135,10 @@ class FormulaComposer:
 
     def seed_gen1(self, n=6):
         """第 1 代：纯随机复合公式（仅当没有任何精英/保种可用时启动演进）。"""
+        n = max(1, int(n or 1))  # 防守夜人压到 n=0 时 ValueError
         self.population = [_random_comp_params(self.rng, depth=0) for _ in range(n)]
         # gen = 本代最大嵌套深度 + 1
-        self.gen = max(_depth_of(c) for c in self.population) + 1
+        self.gen = max((_depth_of(c) for c in self.population), default=0) + 1
         return self._to_genomes()
 
     def breed_from_elites(self, elite_comps, n=6):
