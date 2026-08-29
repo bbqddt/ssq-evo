@@ -208,6 +208,44 @@ def missing_mass(reds, blues, delta=0.05):
 # ---------------------------------------------------------------------------
 # 6. 不变性检验
 # ---------------------------------------------------------------------------
+def validate_missing_mass_bound(m_mc=200, n_draw=3496, m_support=50000,
+                                alpha=1.2, delta=0.05, seed=7):
+    """在**已知真值**的合成数据上验证 McAllester–Schapire 界的覆盖率。
+
+    为什么必须有这一步
+    ------------------
+    原协议的写法：
+        low <= empirical_missing <= high    其中 low=GT-ε, high=GT+ε
+    是**恒真式**——上界下界由被检验的量自身构造，永远不可能失败，零信息。
+    真实数据的"真缺失质量"不可知，所以界的有效性只能在合成数据上验证：
+    构造一个已知 p 的分布，真缺失质量 = 未被抽到的那些 p_i 之和，
+    再检查 MS 界是否以 >=1-δ 的频率覆盖真值。
+    """
+    rng = np.random.default_rng(seed)
+    w = 1.0 / np.arange(1, m_support + 1) ** alpha
+    p = w / w.sum()
+    cover = 0
+    ratios = []
+    tms = []
+    for _ in range(m_mc):
+        s = rng.choice(m_support, size=n_draw, p=p)
+        obs = np.zeros(m_support, bool)
+        obs[s] = True
+        true_missing = float(p[~obs].sum())
+        f1 = int(np.sum(np.bincount(s, minlength=m_support) == 1))
+        gt = f1 / n_draw
+        eps = sqrt(2.0 * log(1.0 / delta) / n_draw)
+        lo, hi = gt - eps, min(1.0, gt + eps)
+        if lo <= true_missing <= hi:
+            cover += 1
+        ratios.append(gt / (true_missing + 1e-12))
+        tms.append(true_missing)
+    return {"m_mc": m_mc, "delta": delta, "coverage": cover / m_mc,
+            "nominal": 1 - delta, "valid": bool(cover / m_mc >= (1 - delta)),
+            "gt_over_true_mean": float(np.mean(ratios)),
+            "true_missing_mean": float(np.mean(tms))}
+
+
 def label_equivariance(counts, theta):
     """打乱球标签 → 后验应等变（ catching bugs，非科学检验）。"""
     p0 = posterior_mean(counts, theta)
@@ -262,8 +300,10 @@ def self_falsification(reds, blues, theta, null, mc_m=60, margin=0.01):
 
     mm = missing_mass(reds, blues)
     R["missing_mass"] = mm
-    R["missing_mass_valid"] = bool(mm["mc_allester_schapire"]["low"] <= mm["good_turing"]
-                                   <= mm["mc_allester_schapire"]["high"])
+    # 不用恒真式（low<=GT<=high 永远成立）。改在已知真值的合成数据上验证界本身。
+    msv = validate_missing_mass_bound()
+    R["missing_mass_bound_validation"] = msv
+    R["missing_mass_valid"] = bool(msv["valid"])
 
     R["label_equivariance"] = label_equivariance(counts, theta)
     ts = time_shift_invariance(reds, theta)
