@@ -17,6 +17,7 @@ HOST_ONLY_PY = {
     "evolve_predictor.py",   # 公式演进实验脚本（本机8核/CI runner 跑，不属 Docker 引擎镜像）
     "merge_evo_proposals.py",# 分布式 evolve 的 artifact 合并（workflow 跑，不进容器）
     "meta_audit.py",         # 只读元审计（宿主机跑，docker exec 读容器内状态，不进容器）
+    "smoke_historical_fitness.py",  # Goodhart 陷阱对照实验（宿主跑，只读数据写 audit/，不进容器）
 }
 
 
