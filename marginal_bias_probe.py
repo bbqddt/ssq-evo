@@ -35,6 +35,7 @@ from datetime import datetime
 import numpy as np
 
 import data as D
+import honesty_footer as HF
 import paths
 
 N_BALL = 33
@@ -245,6 +246,8 @@ def main(m_mc=400, k_scan=(4, 6, 8, 12, 16, 24), pos_sigma=(2.0, 3.6, 6.0, 10.0)
                          "与本预注册向量求相关 r 与方向命中率；"
                          "零分布用同期数的均匀随机模拟。判显著阈值 p<0.05。"),
         "status": "CANDIDATE — 未确认，禁止作为结论使用",
+        "footer": HF.HONESTY_FOOTER,   # 单一事实来源，禁止在别处复制
+        "jackpot_odds": "1/%d" % HF.JACKPOT_ODDS,
     }
     reg_path = paths.p("audit", "marginal_bias_preregistered.json")
     json.dump(reg, open(reg_path, "w", encoding="utf-8"), indent=2, ensure_ascii=False)

@@ -20,6 +20,7 @@ import html
 import datetime
 import shutil
 import paths
+import honesty_footer as HF   # 诚实页脚单一事实来源（改 honesty_footer.py 即全站同步）
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = paths.DATA_DIR
@@ -533,6 +534,14 @@ def build(records):
   setInterval(check, 2*60*60*1000);  // 每 2 小时核对一次
 }})();
 </script>
+
+<div class="sec" style="border-left:4px solid #c0392b;background:#fff8f8">
+  <h3>诚实页脚（不可移除）</h3>
+  <p style="font-size:15px"><b>{_esc(HF.HONESTY_FOOTER)}</b></p>
+  <p class="sub">结构 ≠ 印钞机。本页任何"候选/信号"表述均<b>不构成</b>可盈利结论；
+     头奖概率 1 / {HF.JACKPOT_ODDS:,}（≈{_esc(HF.JACKPOT_ODDS_TEXT)}），
+     边际频率的百分比级偏移无法跨越组合爆炸造成的概率鸿沟。</p>
+</div>
 </body></html>"""
     return html_doc
 
