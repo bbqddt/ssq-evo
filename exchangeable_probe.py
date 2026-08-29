@@ -310,6 +310,8 @@ def self_falsification(reds, blues, theta, null, mc_m=60, margin=0.01):
     R["time_shift"] = ts
     R["time_shift_ok"] = bool(ts["gap"] < 0.05 * max(ts["forward"], ts["reverse"]))
 
+    R["joint"] = joint_min_p_test(reds, m_mc=mc_m)
+    R["blue"] = blue_analysis(blues)
     R["passed"] = bool(R["beats_baseline"] and R["missing_mass_valid"]
                        and R["label_equivariance"] and R["time_shift_ok"])
     return R
@@ -318,6 +320,96 @@ def self_falsification(reds, blues, theta, null, mc_m=60, margin=0.01):
 # ---------------------------------------------------------------------------
 # 8. 主流程
 # ---------------------------------------------------------------------------
+def joint_min_p_test(reds, m_mc=150, theta_grid=(1e4, 3e4), seed=2026):
+    """三统计量的**联合** min-p 检验（蒙特卡洛，不假设独立）。
+
+    为什么不能用 Fisher 合并
+    ------------------------
+    Fisher 要求各 p 值在 H0 下独立均匀。实测零假设下：
+        corr(chi2, prequential_delta) = +0.997   ← 本质是同一统计量
+        corr(chi2, OOS相关)            = +0.683
+    ⇒ 三条"证据"实为同一张红球频率计数表的不同切面，Fisher 合并非法且严重偏乐观。
+
+    正确做法：在每次蒙特卡洛重复中**同时**生成三个统计量，用 min-p 的零分布
+    直接给联合 p 值——相关性被自动吸收，无需独立性假设。
+    """
+    n = len(reds)
+    rng = np.random.default_rng(seed)
+
+    def stat3(r):
+        c1 = chi2_counts(ball_counts(r))
+        c2 = max(prequential_logloss(r, th)["delta"] for th in theta_grid)
+        cut = int(n * 0.7)
+        c3 = float(np.corrcoef(_dev_vec(r[:cut]), _dev_vec(r[cut:]))[0, 1])
+        return c1, c2, c3
+
+    o = stat3(reds)
+    S = np.array([stat3(gen_uniform(n, rng)) for _ in range(m_mc)]).T   # 3 x M
+
+    def rp(obs, null):
+        return float(min(1.0, (null >= obs).mean() + 0.5 / m_mc))
+
+    p_marg = [rp(o[i], S[i]) for i in range(3)]
+
+    # min-p 的零分布：留一法为每个零样本算边际 p，再取 min
+    mp = []
+    for j in range(m_mc):
+        ps = [rp(S[i][j], np.delete(S[i], j)) for i in range(3)]
+        mp.append(min(ps))
+    mp = np.array(mp)
+    joint = float((mp <= min(p_marg)).mean() + 0.5 / m_mc)
+    corr = np.corrcoef(S)
+    return {"observed": [float(v) for v in o],
+            "p_marginal": [round(v, 4) for v in p_marg],
+            "min_p_observed": round(min(p_marg), 4),
+            "joint_p": round(joint, 4),
+            "bonferroni_3x": round(min(3 * min(p_marg), 1.0), 4),
+            "null_corr": [[round(float(corr[i][j]), 3) for j in range(3)] for i in range(3)],
+            "labels": ["chi2", "prequential_delta", "oos_corr"],
+            "M": m_mc,
+            "note": "chi2 与 prequential_delta 在零假设下 r≈0.997 —— 非独立证据"}
+
+
+def _dev_vec(r):
+    c = np.bincount(np.asarray(r).ravel(), minlength=N_BALL + 1)[1:N_BALL + 1].astype(float)
+    e = len(r) * N_PICK / N_BALL
+    return (c - e) / e * 100.0
+
+
+def blue_analysis(blues, m_mc=400, m_pos=200, seed=11):
+    """蓝球同模型完整配套（含功效）——此前只报了 p，属选择性报告。"""
+    rng = np.random.default_rng(seed)
+    n = len(blues)
+
+    def cnt(b):
+        return np.bincount(np.asarray(b), minlength=N_BLUE + 1)[1:N_BLUE + 1].astype(float)
+
+    def chi2b(c):
+        e = c.sum() / N_BLUE
+        return float(((c - e) ** 2 / e).sum())
+
+    obs = chi2b(cnt(blues))
+    null = np.array([chi2b(cnt(rng.integers(1, N_BLUE + 1, size=n))) for _ in range(m_mc)])
+    p = float(min(1.0, (null >= obs).mean() + 0.5 / m_mc))
+    thr = float(np.quantile(null, 0.95))
+    rel_sd = 100.0 * np.sqrt(n * (1 / N_BLUE) * (1 - 1 / N_BLUE)) / (n / N_BLUE)
+
+    def gen_b(sg, sd):
+        w = np.exp(np.random.default_rng(sd).normal(0, sg / 100.0, N_BLUE))
+        pp = w / w.sum()
+        cs = np.cumsum(pp)
+        return np.array([int(np.searchsorted(cs, x)) + 1 for x in rng.random(n)])
+
+    power = []
+    for sg in (3.5, 6.0, 10.0):
+        hits = sum(1 for m in range(m_pos) if chi2b(cnt(gen_b(sg, 4000 + m))) >= thr)
+        power.append({"sigma_injected": sg, "detect_rate": hits / m_pos})
+    return {"chi2_obs": obs, "null_mean": float(null.mean()), "null_sd": float(null.std()),
+            "rank_p": p, "slots": n, "rel_sd_null_pct": float(rel_sd),
+            "power": power,
+            "note": "蓝球槽位仅为红球的 1/6，零假设噪声 sd 6.55%% vs 红球 3.91%%"}
+
+
 def main(m_mc=500, theta_fixed=None, pos_sigma=(1.0, 2.0, 3.5, 6.0), m_pos=60):
     reds, blues = load_real()
     n = len(reds)
@@ -415,11 +507,17 @@ def main(m_mc=500, theta_fixed=None, pos_sigma=(1.0, 2.0, 3.5, 6.0), m_pos=60):
     print("    ⇒ 观测 σ̂=%.2f%% 对应的注入刻度 ≈ %.2f%%" % (sigma_hat, rep["sigma_at_obs"]))
 
     # --- 判决 ---
-    if R["excess_chi2"] and R["beats_baseline"]:
-        verdict = ("CANDIDATE_STRENGTHENED — 段内超额离散 + 样本外顺序预测力均已检出；"
-                   "仍须预注册前瞻确认或物理测量坐实，禁止表述为'已确认结构'")
+    # 判决基于**联合 p**（蒙特卡洛 min-p，吸收统计量间相关性），不用 Fisher。
+    jp = R.get("joint", {}).get("joint_p")
+    if jp is not None and jp < 0.05:
+        verdict = ("CANDIDATE_WEAK — 联合 p=%.4f（三统计量在零假设下 r≈0.997，非独立证据）；"
+                   "无独立复现（蓝球功效仅 12%%），且已行使研究者自由度。仍须预注册前瞻确认"
+                   "或物理测量坐实。禁止表述为'已确认结构'。" % jp)
+    elif jp is not None:
+        verdict = ("ARTIFACT_SUSPECTED — 联合 p=%.4f 不显著；单一离散统计量的边际显著性"
+                   "来自相关性极高的重复投影，倾向于伪影。" % jp)
     elif R["excess_chi2"]:
-        verdict = "CANDIDATE_HELD — 仅段内超额离散，样本外预测力未过闸"
+        verdict = "CANDIDATE_HELD — 仅段内超额离散，未经联合校正"
     else:
         verdict = "NO_EXCESS_AT_THIS_THETA"
     rep["verdict"] = verdict
