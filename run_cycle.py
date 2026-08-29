@@ -900,6 +900,9 @@ def main():
         "oot_above": bool(oot and oot["above_random"]),
         "oot_n": (oot["n"] if oot else 0),
         "oot_rule": (oot["best_rule"] if oot else None),
+        # 下尾观测（单向闸门漏检的"系统性低于随机"）：只记录不判定
+        "oot_p_low": (round(oot["p_low"], 4) if oot and oot.get("p_low") is not None else None),
+        "oot_below": bool(oot and oot.get("below_random")),
         "spectral_q": spec["q_min"], "spectral_q_rank": spec["q_rank"], "spectral_p": spec["p_min"],
         "spectral_best_sig": spec["best_sig"], "spectral_best_test": spec["best_test"],
         "spectral_best_z": spec["best_z"], "spectral_z_min": spec["z_min"],
@@ -984,6 +987,9 @@ def main():
         "oot_above": bool(oot and oot["above_random"]),
         "oot_n": (oot["n"] if oot else 0),
         "oot_rule": (oot["best_rule"] if oot else None),
+        # 下尾观测（单向闸门漏检的"系统性低于随机"）：只记录不判定
+        "oot_p_low": (round(oot["p_low"], 4) if oot and oot.get("p_low") is not None else None),
+        "oot_below": bool(oot and oot.get("below_random")),
         "spectral_q": spec["q_min"], "spectral_q_rank": spec["q_rank"], "spectral_p": spec["p_min"],
         "spectral_best_sig": spec["best_sig"], "spectral_best_test": spec["best_test"],
         "spectral_best_z": spec["best_z"], "spectral_z_min": spec["z_min"],

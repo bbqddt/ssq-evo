@@ -19,6 +19,9 @@ HOST_ONLY_PY = {
     "meta_audit.py",         # 只读元审计（宿主机跑，docker exec 读容器内状态，不进容器）
     "smoke_historical_fitness.py",  # Goodhart 陷阱对照实验（宿主跑，只读数据写 audit/，不进容器）
     "power_analysis.py",            # 理论边界/功率分析决策门（宿主跑，只读数据写 audit/，不进容器）
+    "random_control_oot.py",        # OOT 随机数据对照闸门（宿主审计，证伪构造性伪信号）
+    "gate_control_experiment.py",   # 新 OOT 闸门阴性/阳性对照（宿主审计）
+    "gate_control_ev_a.py",         # EV_A 变换通带内阳性对照（宿主审计）
 }
 
 

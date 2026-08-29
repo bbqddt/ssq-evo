@@ -18,6 +18,7 @@
 import json
 import math
 import os as _os
+import time
 import copy
 import multiprocessing as mp
 import numpy as np
@@ -2118,6 +2119,73 @@ def _oos_hitrate(series, cut, w, rules):
     return float(np.mean(pv[valid] == av[valid])), int(valid.sum()), best_rule
 
 
+def _gen_draw_surrogates(ev, reds, blues, k_sur, rng, reorder=None, budget_s=25.0):
+    """原始数据层零假设：打乱**期序**（保留每期内部组合与边际分布），再走同一信号构造。
+
+    与 `_gen_surrogates(构造后序列)` 的本质区别
+    ------------------------------------------
+    后者打乱的是**已构造的序列 x**，会连同「变换自身带来的序列结构」一起摧毁
+    （典型：ewm 平滑 → 增量强负相关 → `rev` 反转规则天然高分）。于是真实序列
+    的平滑性会被当成「数据的结构」，产出 p≈0.005 的假显著——而同样的分数在
+    **纯随机开奖**上一模一样地出现（见 random_control_oot.py 实测：随机数据
+    OOT 命中率 0.83~0.89、假显著率 100%）。
+
+    在**原始数据层**打乱期序，则变换对真实与替代一视同仁（替代序列同样被平滑），
+    剩下能被检出的差异才是真正的**跨期结构**。
+
+    注意：这里的零假设回答的是「数据有无可被公式利用的跨期结构」，
+    而非「序列 x 是否非 i.i.d.」——后者会不可避免地把变换的性质算进数据的功劳。
+    """
+    out = []
+    n = len(reds)
+    if n < 8:
+        return out
+    t0 = time.time()
+    for _ in range(int(k_sur)):
+        # 时间预算：重信号(如 corr_dim/TE)重建 k_sur 次可能拖垮单轮，
+        # 超时即停并把实际替代数如实记入结果 k_sur 字段（诚实，不虚报样本量）。
+        if out and (time.time() - t0) > budget_s:
+            break
+        pi = rng.permutation(n)
+        r, b = reds[pi], blues[pi]
+        if reorder and reorder != "identity":
+            try:
+                r, b = apply_reorder(r, b, reorder, rng)
+            except Exception:
+                continue
+        try:
+            x = _build_x(ev["sig"], r, b, ev.get("params"))
+        except Exception:
+            continue
+        if x is not None:
+            out.append(np.asarray(x, float))
+    return out
+
+
+def _hr_frozen(s, lo, best_rule, min_n=30):
+    """在序列 s 上用**冻结**的读取规则计算盲测段因果命中率，与其自身 actual 比对。
+
+    自洽性要求：替代序列的命中率必须与**它自己的**实际方向比对，而不是与真实
+    actual 比对。旧 `out_of_time` 拿替代序列的预测去比真实 actual，二者独立 ⇒
+    替代命中率塌到 ~0.5，任何有自相关的序列都会"显著"——这是第二处缺陷。
+    """
+    s = np.asarray(s, float)
+    nn = len(s)
+    if nn < 4:
+        return None
+    actual = np.sign(np.diff(s))
+    pred = _pred_from_rule(s, best_rule[0], best_rule[1], nn)
+    os_idx = np.arange(lo, nn - 1)
+    if os_idx.size < min_n:
+        return None
+    pv = pred[os_idx]
+    av = actual[os_idx]
+    valid = (pv != 0) & (av != 0)
+    if valid.sum() < min_n:
+        return None, 0
+    return float(np.mean(pv[valid] == av[valid])), int(valid.sum())
+
+
 def oos_accuracy(ev, reds, blues, rng, frac=0.2, w=60, k_sur=40):
     """诚实的「高于随机」方向准确率 —— 准确率由公式自身的读取规则决定。
 
@@ -2235,36 +2303,42 @@ def out_of_time(ev, reds, blues, rng, train_frac=0.85, w=60, k_sur=40):
     os_idx = np.arange(holdout, nn - 1)
     if os_idx.size < 30:
         return None
-    pv = _pred_from_rule(s, best_rule[0], best_rule[1], nn)[os_idx]
-    av = actual[os_idx]
-    valid = (pv != 0) & (av != 0)
-    if valid.sum() < 30:
+    hr, n_valid = _hr_frozen(s, holdout, best_rule)
+    if hr is None:
         return None
-    hr = float(np.mean(pv[valid] == av[valid]))
-    # 3) 盲测段替代分布校准(零假设用该检验对应 sur_type，与结构检验一致)
-    try:
-        surs = _gen_surrogates(s, int(k_sur), rng, TEST_SUR_TYPE.get(ev["test"], "aaft"))
-    except Exception:
-        surs = np.empty((0, n))
+    # 3) 盲测段替代分布校准：在【原始数据层】打乱期序后重走同一信号构造。
+    #    零假设回答的是"数据有无可被公式利用的跨期结构"——变换自带的平滑对
+    #    真实序列与替代序列一视同仁，故不会被算成数据的功劳。
+    #    （旧实现：打乱**构造后**序列 + 拿替代预测去比**真实** actual。两处缺陷叠加 ⇒
+    #      ewm 平滑 + rev 规则在纯随机开奖上稳定拿到 hit≈0.85、p=0.005，
+    #      假显著率 100%（见 random_control_oot.py 实测）。）
+    surs = _gen_draw_surrogates(ev, reds, blues, int(k_sur), rng, reorder)
     hr_sur = []
-    for i in range(surs.shape[0] if surs.ndim == 2 else 0):
-        p = _pred_from_rule(surs[i], best_rule[0], best_rule[1], nn)[os_idx]
-        v = (p != 0) & (av != 0)
-        if v.sum() >= 30:
-            hr_sur.append(float(np.mean(p[v] == av[v])))
+    for xs in surs:
+        h, _nv = _hr_frozen(xs, holdout, best_rule)
+        if h is not None:
+            hr_sur.append(h)
     hr_sur = np.array(hr_sur) if hr_sur else np.empty(0)
     if hr_sur.size == 0:
         return None
     p_random = float((hr_sur >= hr).mean() + 0.5 / hr_sur.size)
     p_random = min(1.0, max(0.0, p_random))
+    # 下尾 p（如实记录，不改变判定）：闸门目前是单向"高于随机"，
+    # 但系统性**低于**随机同样可能是结构（把预测反过来即可利用）。
+    # 这里只做观测记录，供审计发现"单向闸门漏检的下尾偏差"；
+    # 是否改为双向闸门须先跑独立的阴性/阳性对照，不得直接放宽判定。
+    p_low = float((hr_sur <= hr).mean() + 0.5 / hr_sur.size)
+    p_low = min(1.0, max(0.0, p_low))
     return {
         "hit_rate": hr,
         "sur_mean": float(hr_sur.mean()),
         "sur_std": float(hr_sur.std(ddof=0)) if hr_sur.size > 1 else 0.0,
         "p_random": p_random,
         "above_random": bool(p_random <= 0.05),
+        "p_low": p_low,
+        "below_random": bool(p_low <= 0.05),
         "k_sur": int(hr_sur.size),
-        "n": int(valid.sum()),
+        "n": int(n_valid),
         "best_rule": (best_rule[0] if best_rule else None),
         "holdout_n": int(os_idx.size),
     }
