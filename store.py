@@ -13,9 +13,11 @@ def open_db(path):
         ts TEXT, n_issues INTEGER, added INTEGER,
         n_eval INTEGER, best_q REAL, best_sig TEXT, best_test TEXT,
         best_p REAL, oos_p REAL, alert INTEGER, note TEXT)""")
-    # 增量迁移：新增 coverage 列（已存在则忽略）
+    # 增量迁移：新增 coverage 列（已存在则跳过，避免每次刷 WARN）
     try:
-        cur.execute("ALTER TABLE runs ADD COLUMN coverage INTEGER")
+        cols = [r[1] for r in cur.execute("PRAGMA table_info(runs)")]
+        if "coverage" not in cols:
+            cur.execute("ALTER TABLE runs ADD COLUMN coverage INTEGER")
     except sqlite3.OperationalError as _e:
         ssq_log.log_exception("store", _e, "store.py:18 silent-except")
     cur.execute("""CREATE TABLE IF NOT EXISTS evals(

@@ -21,6 +21,7 @@ firewall.py —— 诚实防火墙（四道物理机制 + 自动合并封死）
 import os
 import json
 import subprocess
+import shutil
 from datetime import datetime, timezone
 
 import numpy as np
@@ -36,13 +37,16 @@ PROD_CANDIDATES = os.path.join(_DATA_DIR, "production_candidates.json")
 # 0. 代码版本（用于审计留痕；本地 git，不联网）
 # ---------------------------------------------------------------------------
 def code_version():
-    try:
-        out = subprocess.run(["git", "-C", HERE, "rev-parse", "HEAD"],
-                             capture_output=True, text=True, timeout=10)
-        if out.returncode == 0 and out.stdout.strip():
-            return out.stdout.strip()[:12]
-    except Exception as _e:
-        ssq_log.log_exception("firewall", _e, "firewall.py:43 silent-except")
+    # 容器内通常不装 git，先探测；不可用则直接走 build_info.txt 回退，避免每次刷 WARN。
+    git = shutil.which("git")
+    if git:
+        try:
+            out = subprocess.run([git, "-C", HERE, "rev-parse", "HEAD"],
+                                 capture_output=True, text=True, timeout=10)
+            if out.returncode == 0 and out.stdout.strip():
+                return out.stdout.strip()[:12]
+        except Exception as _e:
+            ssq_log.log_exception("firewall", _e, "firewall.py:43 silent-except")
     # 容器内无 git → 回退读 Dockerfile 注入的 build_info.txt
     try:
         bf = os.path.join(HERE, "build_info.txt")
