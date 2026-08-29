@@ -31,6 +31,7 @@ import firewall as FW
 import proposer as PR
 import scoring as SC
 import formula_composer as FC
+import watchdog_mode as WD
 
 MASTER = os.path.join(DATA_DIR, "ssq_master.csv")
 DB = os.path.join(DATA_DIR, "ssq_evo.db")
@@ -38,7 +39,7 @@ STATE = os.path.join(DATA_DIR, "state.json")
 
 # ---- 可调参数（部署时可改 config.json）----
 DEFAULT_CFG = {
-    "epochs": 6, "pop": 24, "k_light": 25, "k_heavy": 10,
+    "epochs": 8, "pop": 30, "k_light": 25, "k_heavy": 10,  # pop/epochs 适度提高：进程池提速后，把释放的算力用于更深搜索
     "k_causal": 50,   # 因果扫描专用 surrogate 数：8 个方向×检验下, k=25 的 p 地板 1/26≈0.038
                       # 经 BH-FDR(8检验) 后 q 仅 0.051(勉强不过 0.05)。提到 50 使 p 地板 1/51≈0.0196,
                       # 强耦合可被判 q<0.05, 既保留"真实数据仍稳 null"又证明闸门有检出功效。
@@ -54,10 +55,20 @@ DEFAULT_CFG = {
     # 防火墙加固：GA 搜索只喂【发现段】，确认/实盘段物理隔离（杜绝搜索阶段看未来数据）。
     # 默认开启（真实加固）；设为 False 可回退到全量数据旧行为。
     "firewall_discovery_only": True, "ga_discovery_frac": 0.7, "ga_audit_topk": 8,
+    # GA 内 OOS 命中率计算：默认仅末代(懒算, 省 5/6 重复评估)；设为 True 则每代都算(更准但更慢)
+    "ga_oos_every_epoch": False,
+    # 反思设计层：智能组件每轮反省公式设计弱点并注入候选（红线锁死：不旁路闸门/不自动合并）
+    "ga_reflect_enabled": True,
+    # 进程池复用：单轮评估后的守护进程回收（防 Windows 长时内存膨胀）
+    "ga_pool_maxtasks": 200,
     # 智能演进层（默认关闭：防火墙先焊死，再放智能模块进来）。
     # 开启后，智能层生成的候选会并入【同款闸门管线】(BH-FDR+OOT+#41+随机对照)，
     # 绝不旁路任何闸门；每个候选还需先过防火墙随机重放硬门。
-    "intelligent_evolution_enabled": False, "intel_budget": 30,
+    "intelligent_evolution_enabled": True, "intel_budget": 30,
+    # 守夜人模式（默认启用）：所有可获取轴经诚实闸门证 NULL 后，连续 N 周期无 above_random
+    # 信号则暂停"空转 GA"（缩减预算），保留监测/阳性对照/draw-day 打分/闸门待命。
+    # 新基元注入或 force_resume 立即恢复。绝不改诚实闸门、绝不自动合并（红线不变）。
+    "watchdog_mode_enabled": True, "watchdog_stagnation_cycles": 30, "watchdog_force_resume": False,
 }
 FDR_Q = 0.05          # 结构显著的 FDR 门槛（与看板一致）
 
@@ -271,6 +282,17 @@ def load_cfg():
         cfg["cache_enabled"] = cfg.pop("enabled")
     if "path" in cfg:
         cfg["cache_path"] = cfg.pop("path")
+    # 4) 狂跑涡轮：环境变量 SSQ_TURBO=1 时拉满算力（用户要"三驾车狂跑"）。
+    #    仅作用于搜索强度，绝不改动闸门/诚实护栏。优先级低于显式 config（config 已覆盖则尊重 config）。
+    if os.environ.get("SSQ_TURBO") == "1" and not cfg.get("_turbo_explicit"):
+        cfg["epochs"] = max(cfg["epochs"], 20)
+        cfg["pop"] = max(cfg["pop"], 60)
+        cfg["k_light"] = max(cfg["k_light"], 40)
+        cfg["ga_oos_every_epoch"] = True          # 狂跑时每代算 OOS，精度优先
+        cfg["ga_reflect_enabled"] = True         # 狂跑必开反省
+        cfg["_turbo"] = True
+        print(f"[turbo] SSQ_TURBO=1 已激活：epochs={cfg['epochs']} pop={cfg['pop']} "
+              f"k_light={cfg['k_light']} oos_every_epoch=True")
     return cfg
 
 
@@ -408,6 +430,10 @@ def main():
     elite_seeds = fr.get("elites", [])
     print(f"[cycle] frontier: 历史覆盖度={fr.get('coverage',0)}, 精英种子={len(elite_seeds)}, "
           f"z历史长度={len(fr.get('best_z_history',[]))}")
+    # 守夜人模式：若已触发停滞，缩减 GA 预算（停止空转），保留监测+闸门待命
+    cfg, wd_paused = WD.effective_cfg(cfg, fr)
+    if wd_paused:
+        print(f"[watchdog] {WD.resume_note(fr, cfg)} (pop={cfg['pop']}, epochs={cfg['epochs']})")
     # —— 防火墙加固：GA 搜索只喂【发现段】，确认/实盘段物理隔离 ——
     ga_reds, ga_blues = reds, blues
     fw_seed = int(cfg.get("seed", 20260813)) + N
@@ -487,7 +513,12 @@ def main():
     evo = E.Evolution(ga_reds, ga_blues, rng, k_light=cfg["k_light"], k_heavy=cfg["k_heavy"],
                       epochs=cfg["epochs"], pop=cfg["pop"],
                       elites=elite_seeds, frontier=fr, eval_cache=ec,
-                      elite_bias=_elite_bias, prune_sigs=_prune_sigs)
+                      elite_bias=_elite_bias, prune_sigs=_prune_sigs,
+                      oos_every_epoch=cfg.get("ga_oos_every_epoch", False),
+                      memetic=True, coalition=True,
+                      memetic_top_n=cfg.get("ga_memetic_top_n", 3),
+                      memetic_k=cfg.get("ga_memetic_k", 4),
+                      reflect_enabled=cfg.get("ga_reflect_enabled", True))
     leaderboard, all_evals = evo.run()
     print(f"[cycle] 评估算子数(含重复): {len(all_evals)}, 唯一基因组: {len(leaderboard)}")
     # —— 审计账本：记录 GA Top-K 候选的来源留痕（看的数据段指纹/种子/代码版本）——
@@ -758,6 +789,12 @@ def main():
         print(f"[cycle] ingest_candidates 异常(不影响主流程): {_ie}")
         _ingest_result = "ERROR"
 
+    # 守夜人模式：更新停滞计数（有 above_random 信号或 alert 则清零，否则 +1）
+    fr = WD.update_stagnation(fr, bool(oos_above or alert))
+    fr["watchdog_paused"] = WD.is_watchdog_paused(fr, cfg)
+    if fr["watchdog_paused"]:
+        print(f"[watchdog] {WD.resume_note(fr, cfg)}")
+
     F.save_frontier(DATA_DIR, fr)
     z_hist = fr["best_z_history"]
     newly = fr["coverage"] - prev_tried
@@ -937,6 +974,9 @@ def main():
         "ns_best_mom_q": round(ns["best_q_mom"], 4),
         "ns_verdict": ns["verdict"], "ns_k_sur": ns["k_sur"],
         "alert": bool(alert),
+        "watchdog_paused": bool(fr.get("watchdog_paused", False)),
+        "cycles_since_signal": int(fr.get("cycles_since_signal", 0)),
+        "watchdog_note": WD.resume_note(fr, cfg),
         "positive_control": pc,   # 持续阳性对照结果（None=本轮未跑；dict=闸门功率核验）
         "artifact_prone_n": len(prone), "artifact_prone": sorted(prone),
         "n_eval": len(all_evals), "n_unique": len(leaderboard),

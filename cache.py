@@ -27,6 +27,11 @@ import hashlib
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+# 评估缓存逻辑版本：evaluate() 的 surrogate 生成/统计逻辑一旦变更，必须 +1，
+# 使旧缓存键全部失效（旧逻辑产出的 eval 不应被新逻辑复用，否则静默返回陈旧结果）。
+# 这是对"种子级缓存"方案隐含的版本隔离缺口的补强（原方案仅按 genome+数据+seed 键）。
+EVAL_CACHE_VERSION = 1
+
 
 def data_fingerprint(reds, blues, n_tail=60):
     """轻量数据指纹：N + 末尾 n_tail 期的哈希。
@@ -83,8 +88,12 @@ class EvalCache:
             return obj.tolist()
         return obj
 
-    def get(self, genome_key, fp):
-        key = f"{genome_key}|{fp}"
+    def get(self, genome_key, fp, seed=None, k_sur=None, sur_type=None):
+        # 种子级键：同 (基因组, 数据集, surrogate种子, k_sur, sur_type) 才复用。
+        # 避免不同 surrogate 设置互相污染，同时让「相同 genome 跨 epoch 重评估」命中缓存、
+        # 跳过昂贵的 surrogate 重算（surrogate 占单轮评估 ~60% 时间）。
+        # 前缀 v{EVAL_CACHE_VERSION}：evaluate() 的 surrogate/统计逻辑变更时 +1 令旧键全失效。
+        key = f"v{EVAL_CACHE_VERSION}|{genome_key}|{fp}|{seed}|{k_sur}|{sur_type}"
         with self._lock:
             v = self._mem.get(key)
         if v is not None:
@@ -93,8 +102,8 @@ class EvalCache:
         self.misses += 1
         return None
 
-    def put(self, genome_key, fp, eval_dict):
-        key = f"{genome_key}|{fp}"
+    def put(self, genome_key, fp, eval_dict, seed=None, k_sur=None, sur_type=None):
+        key = f"v{EVAL_CACHE_VERSION}|{genome_key}|{fp}|{seed}|{k_sur}|{sur_type}"
         clean = self._sanitize(eval_dict)
         with self._lock:
             self._mem[key] = clean
@@ -145,3 +154,86 @@ def _default_eval_worker(task):
     rng = np.random.default_rng(int(seed))
     import engine_core as E
     return E.evaluate(sig, test, reds, blues, rng, k, sur_type=sur_type, params=params)
+
+
+# ---------------------------------------------------------------------------
+# 3) 真·多进程评估（运算速度 / 算力的主要杠杆）
+# ---------------------------------------------------------------------------
+# 线程池对纯 Python 循环的检验函数(perm_entropy 等)不释放 GIL => 近似串行还白加
+# 切换开销（实测 8 核反而比串行慢 0.9x）。改用进程池，把 CPU 密集的检验真正并行。
+# 关键优化：reds/blues 只经 initializer 传给子进程【一次】，task 不再打包整个数组
+# （否则 Windows spawn 下每个 task 都 pickle 大数组 => 开销爆炸）。task 仅含小元组，
+# 跨进程极轻。统计结果与线程池/串行严格一致（每个 task 自带 seed 建独立 rng）。
+_EVAL_REDS = None
+_EVAL_BLUES = None
+_EVAL_POOL = None          # 复用的进程池（跨 epoch 共享，避免每 epoch 重 spawn）
+_EVAL_POOL_DATA_ID = None  # 当前池对应的 reds 对象 id，变更则重建池
+
+
+def _init_eval_worker(reds, blues):
+    global _EVAL_REDS, _EVAL_BLUES
+    _EVAL_REDS = reds
+    _EVAL_BLUES = blues
+
+
+def _eval_worker_noshare(task):
+    """task = (sig, test, params, k, sur_type, seed)；数组经全局注入，不随 task 传送。"""
+    import numpy as np
+    import engine_core as E
+    sig, test, params, k, sur_type, seed = task
+    rng = np.random.default_rng(int(seed))
+    return E.evaluate(sig, test, _EVAL_REDS, _EVAL_BLUES, rng, k,
+                      sur_type=sur_type, params=params)
+
+
+def eval_parallel_map(tasks, reds, blues, max_workers=None):
+    """评估专用并行映射：进程池（数组经 initializer 注入，task 仅小元组）。
+
+    返回 list（保序）。n_workers<=1 或无任务 => 串行。进程池创建失败(spawn 受限等)
+    => 自动回退串行（统计等价），不影响正确性，仅损失加速。
+
+    关键优化：进程池【模块级复用】——只在首次（或数据集变更时）spawn 一次，
+    之后所有 epoch 共享同一池，把 import scipy/numpy + 大数组初始化的开销摊薄到一次，
+    避免每 epoch 重 spawn（实测每 epoch 重 spawn 比串行更慢 ~0.56x）。
+    """
+    global _EVAL_POOL, _EVAL_POOL_DATA_ID
+    if max_workers is None:
+        import os as _os
+        max_workers = max(1, min(_os.cpu_count() or 4, 8))
+    # 主进程也注入（串行兜底 + 单测可直跑）
+    _init_eval_worker(reds, blues)
+    if max_workers <= 1 or not tasks:
+        return [_eval_worker_noshare(t) for t in tasks]
+    try:
+        import multiprocessing as mp
+        # 数据集变更（不同 reds 对象）则重建池，避免旧 worker 持有过期数据
+        if _EVAL_POOL is None or id(reds) != _EVAL_POOL_DATA_ID:
+            if _EVAL_POOL is not None:
+                try:
+                    _EVAL_POOL.terminate()
+                except Exception:
+                    pass
+            # maxtasksperchild：每个 worker 处理 N 个任务后自动回收重建，防止 24x7 长时
+            # 运行下 numpy/scipy 内存碎片化导致 worker 内存只增不减（实测长跑 daemon 会爬升）。
+            # 重建开销极小（仅重新 import），换来内存长期稳定。Windows 上 forkserver/loky 不可用，
+            # maxtasksperchild 是 stdlib 内唯一可行的长稳增强。
+            _EVAL_POOL = mp.Pool(processes=max_workers, initializer=_init_eval_worker,
+                                initargs=(reds, blues), maxtasksperchild=200)
+            _EVAL_POOL_DATA_ID = id(reds)
+        return _EVAL_POOL.map(_eval_worker_noshare, tasks)
+    except Exception as e:
+        import sys
+        print("[cache] 进程池不可用(%s)，回退串行" % e, file=sys.stderr)
+        return [_eval_worker_noshare(t) for t in tasks]
+
+
+def close_eval_pool():
+    """显式释放复用的进程池（可选，进程退出时自动回收）。"""
+    global _EVAL_POOL, _EVAL_POOL_DATA_ID
+    if _EVAL_POOL is not None:
+        try:
+            _EVAL_POOL.terminate()
+        except Exception:
+            pass
+        _EVAL_POOL = None
+        _EVAL_POOL_DATA_ID = None

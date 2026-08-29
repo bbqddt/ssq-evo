@@ -22,6 +22,8 @@ import copy
 import multiprocessing as mp
 import numpy as np
 import cache as C   # 增量缓存 + 跨平台并行调度
+import novelty_search as NS  # 多样性维持 / novelty search（防全 null 下种群坍缩）
+import reflective_designer as RD  # 反思设计层：智能组件每轮反省公式设计弱点（可审计、不旁路闸门）
 
 # ---------------------------------------------------------------------------
 # 1. 信号映射 (signal maps)
@@ -185,11 +187,13 @@ SIGMAPS = {
 
 # --- 复合公式层（真正的"公式研发"：在基信号上构造表达式，支持非线性与一层嵌套）---
 # 一元算子（只作用于 a，忽略 b）：对信号做非线性变换，极大扩展公式表达力
-COMP_UNARY = ["sin", "cos", "abs"]
+#   新增：log1p/tanh/sign/rank/ewm(指数加权)/diff_k(k阶差分)/clip(截断) —— 均保长、可微、可 surrogate
+COMP_UNARY = ["sin", "cos", "abs", "log1p", "tanh", "sign", "rank", "ewm", "diff_k", "clip"]
 # 二元/时序算子
-COMP_OPS = ["+", "-", "*", "/", "diff", "z", "lag", "pow", "thresh"]
-# 允许 b 为嵌套子公式的算子（实现"复合套复合"）
-COMP_OPS_NEST = ["+", "-", "*", "/", "pow"]
+#   新增：where(cond,a,b) 条件选择 —— 实现"红和>100 时用 A 否则 B"类条件逻辑，表达力质变
+COMP_OPS = ["+", "-", "*", "/", "diff", "z", "lag", "pow", "thresh", "where"]
+# 允许 b 为嵌套子公式的算子（实现"复合套复合"）。where 的 b 可以是替代分支子树
+COMP_OPS_NEST = ["+", "-", "*", "/", "pow", "where"]
 BASE_SIGNALS = list(SIGMAPS.keys())  # 在加入 comp 之前取，避免递归引用
 
 def _base_signals(reds, blues):
@@ -219,13 +223,14 @@ def _inpaint(x):
     x[:first] = x[first]; x[last + 1:] = x[last]
     return x
 
-_MAX_COMP_DEPTH = 4  # 复合公式树最大嵌套深度（防退化/爆炸）。gen 上限 = _MAX_COMP_DEPTH+1。
+_MAX_COMP_DEPTH = 8  # 复合公式树最大嵌套深度（防退化/爆炸）。gen 上限 = _MAX_COMP_DEPTH = 8（depth<8 可评估）。
+                      # 由 6 抬到 8：给公式代数演进更大表达力头room（仍受 _operand depth<_MAX_COMP_DEPTH 物理约束）。
 
 def _operand(spec, reds, blues, depth, base=None):
     """spec 可以是 基信号名(str) 或 嵌套复合(dict)。返回长度 N 数组或 None。
 
     深度放开：原 depth>=2 硬拒导致 df_gen 物理上限=2（gen=2），公式树无法长出更复杂结构。
-    现允许深度到 _MAX_COMP_DEPTH（gen 上限=_MAX_COMP_DEPTH+1=5）。所有 apply_comp op 均返回
+    现允许深度到 _MAX_COMP_DEPTH（gen 上限=_MAX_COMP_DEPTH+1=7）。所有 apply_comp op 均返回
     与 a 同形状数组（逐元素或保长时序），对"嵌套产物仍是 1D 序列"安全；唯一风险是退化树，
     由 _build_comp 的 isfinite 校验兜底（产物非有限即返回 None）。"""
     if isinstance(spec, dict):
@@ -238,11 +243,37 @@ def _operand(spec, reds, blues, depth, base=None):
         return base.get(spec)
     return None
 
-def _transform(op, a):
+def _transform(op, a, k=1):
     a = np.asarray(a, float)
     if op == "sin": return np.sin(a)
     if op == "cos": return np.cos(a)
     if op == "abs": return np.abs(a)
+    if op == "log1p": return np.log1p(np.abs(a))          # 保长，对任意实数有定义
+    if op == "tanh": return np.tanh(a)                   # 有界 [-1,1]
+    if op == "sign": return np.sign(a)                   # -1/0/1
+    if op == "rank":                                    # 百分位秩 (0,1]，对异常值稳健
+        aa = _inpaint(a)
+        n = len(aa)
+        if n == 0: return aa
+        return (aa.argsort().argsort().astype(float) + 1.0) / n
+    if op == "ewm":                                     # 指数加权滑动平均（向量化卷积）
+        aa = _inpaint(a)
+        n = len(aa)
+        if n == 0: return aa
+        alpha = 0.1
+        w = (1 - alpha) ** np.arange(n - 1, -1, -1)
+        denom = np.convolve(np.ones(n), w, mode='full')[:n]
+        return np.convolve(aa, w, mode='full')[:n] / denom
+    if op == "diff_k":                                   # k 阶差分（前端补 NaN 由 _build_comp 修补）
+        kk = int(np.clip(k, 1, 5))
+        aa = _inpaint(a)
+        d = aa.copy()
+        for _ in range(kk):
+            d = np.diff(d)
+        return np.concatenate([np.full(kk, np.nan), d])
+    if op == "clip":                                     # 均值 ± k·标准差 截断（winsorize），k 来自 cp["k"]
+        mu = np.nanmean(a); sd = np.nanstd(a) + 1e-12
+        return np.clip(a, mu - abs(k) * sd, mu + abs(k) * sd)
     return a
 
 def apply_comp(op, a, b, k):
@@ -271,6 +302,10 @@ def apply_comp(op, a, b, k):
         return np.sign(a) * np.abs(a) ** np.abs(exp)
     if op == "thresh":
         return a - np.nanmedian(a)
+    if op == "where":
+        # 条件选择：a > k 时取 a，否则取 b。k 来自 cp["k"]（阈值可调）。
+        # 实现"红和>100 时用信号 A 否则用信号 B"类条件逻辑，表达力质变。
+        return np.where(a > float(k), a, b)
     return a
 
 def _build_comp(cp, reds, blues, depth=0, base=None):
@@ -278,10 +313,10 @@ def _build_comp(cp, reds, blues, depth=0, base=None):
     if not cp or not isinstance(cp, dict):
         return None
     op = cp.get("op")
-    if op in ("sin", "cos", "abs"):
+    if op in COMP_UNARY:
         a = _operand(cp.get("a"), reds, blues, depth, base)
         if a is None: return None
-        x = _transform(op, a)
+        x = _transform(op, a, cp.get("k", 1))
     else:
         a = _operand(cp.get("a"), reds, blues, depth, base)
         if a is None: return None
@@ -388,13 +423,17 @@ def t_dfa_alpha(x, scales=None):
         num = n // s
         if num < 4:
             continue
-        rms = 0.0
-        for i in range(num):
-            seg = y[i * s:(i + 1) * s]
-            t = np.arange(len(seg))
-            p = np.polyfit(t, seg, 1)
-            rms += np.sqrt(np.mean((seg - np.polyval(p, t)) ** 2))
-        F.append(rms / num)
+        # 向量化 DFA 波动：把 y 重排成 (num, s) 的 box 矩阵，广播最小二乘一次算全部 box 的残差 RMS，
+        # 替代原逐 box 的 Python 循环（num 可达 ~n/10，是主要耗时）。
+        Y = y[:num * s].reshape(num, s)
+        t = np.arange(s)
+        tbar = t.mean()
+        Ybar = Y.mean(axis=1, keepdims=True)
+        slope = ((t - tbar) * (Y - Ybar)).sum(axis=1) / ((t - tbar) ** 2).sum()
+        intercept = Ybar[:, 0] - slope * tbar
+        resid = Y - (slope[:, None] * t + intercept[:, None])
+        rms = float(np.sqrt((resid ** 2).mean(axis=1)).mean())
+        F.append(rms)
         S.append(s)
     if len(S) < 3:
         return np.nan
@@ -967,18 +1006,22 @@ def random_genome(rng):
     return {"sig": sig, "test": test, "params": params}
 
 
-def mutate_genome(g, rng):
-    """对基因组做突变：宏观换模块 或 微调某个旋钮（hill-climbing 核心）。"""
+def mutate_genome(g, rng, local_only=False):
+    """对基因组做突变：宏观换模块 或 微调某个旋钮（hill-climbing 核心）。
+
+    local_only=True 时只做【旋钮微调】(局部 exploitation)，不做宏观换 sig/test、
+    不替换成纯随机基因组——供 memetic 局部精修复用，保证在邻域内搜索而非跳走。"""
     ng = {"sig": g["sig"], "test": g["test"],
           "params": copy.deepcopy(g["params"])}
     # comp 复合公式基因组：params 仅含 _comp（无 _test/_sig），跳过基信号参数微调，
     # 直接走末尾的复合表达式变异分支（避免 KeyError 且保持组合语义）。
     is_comp = (ng["sig"] == "comp")
+    do_macro = (not local_only) and (not is_comp)
     r = rng.random()
-    if not is_comp and r < 0.15:                       # 宏观变异：换检验
+    if do_macro and r < 0.15:                          # 宏观变异：换检验
         ng["test"] = rng.choice(TEST_NAMES)
         ng["params"]["_test"] = _random_params(ng["sig"], ng["test"], rng)["_test"]
-    elif not is_comp and r < 0.30:                     # 宏观变异：换信号映射
+    elif do_macro and r < 0.30:                        # 宏观变异：换信号映射
         ng["sig"] = rng.choice(SIG_NAMES)
         ng["params"]["_sig"] = _random_params(ng["sig"], ng["test"], rng)["_sig"]
     elif not is_comp and r < 0.85:                     # 微调检验参数
@@ -1014,9 +1057,70 @@ def mutate_genome(g, rng):
     return ng
 
 
+def _1d_base_signals():
+    """复合公式只接受 1D 序列信号（blue/blue_resid 为 2D，会导致 comp 产物为 2D
+    而检验函数期望 1D => _build_comp 返回 None 不可评估）。"""
+    return [s for s in BASE_SIGNALS if s not in ("blue", "blue_resid")]
+
+
+def promote_to_comp(g, rng):
+    """把基信号基因组升级为深度>=1 的复合公式(comp)，或把已有 comp 进一步加深。
+
+    这是「公式进化研发方向」的关键算子：让 GA 能从自身种群里成功的基础信号组件
+    【自主合成】复合公式，而不依赖 composer 每轮注入的 8 棵。复合公式仍走统一
+    evaluate()/闸门，绝不旁路（红线）。
+    """
+    if g.get("sig") == "comp":
+        cp = copy.deepcopy(g["params"].get("_comp")) or _random_comp_params(rng)
+        return {"sig": "comp", "test": g.get("test", "mi_max"),
+                "params": {"_comp": _mutate_comp(cp, rng)}}
+    _1d = _1d_base_signals()
+    sig = g.get("sig")
+    a = sig if (isinstance(sig, str) and sig in _1d) else str(rng.choice(_1d))
+    if rng.random() < 0.5:
+        # 直接生成一棵可能嵌套更深的随机复合树（depth<_MAX_COMP_DEPTH-1 时 b 有概率再嵌套）
+        cp = _random_comp_params(rng, depth=0)
+    else:
+        cp = {"op": str(rng.choice(COMP_OPS_NEST)),
+              "a": a, "b": str(rng.choice(_1d)),
+              "k": int(rng.integers(1, 6)),
+              "read": str(rng.choice(["cont", "rev", "mean", "osc"]))}
+    return {"sig": "comp", "test": g.get("test", "mi_max"),
+            "params": {"_comp": cp}}
+
+
+def _combine_to_comp(ga, gb, rng):
+    """把两个父代基因组(任意类型)合成一棵复合公式树：a/b 取各自主信号，按概率嵌套加深。
+
+    让 GA 的 crossover 也能产出复合公式（原 crossover 只交换 sig/test，从不合成 comp）。
+    仍走统一 evaluate()/闸门，绝不旁路。
+    """
+    _1d = _1d_base_signals()
+    a = ga.get("sig"); b = gb.get("sig")
+    a1 = a if (isinstance(a, str) and a in _1d) else str(rng.choice(_1d))
+    b1 = b if (isinstance(b, str) and b in _1d) else str(rng.choice(_1d))
+    cp = {"op": str(rng.choice(COMP_OPS_NEST)),
+          "a": a1, "b": b1,
+          "k": int(rng.integers(1, 6)),
+          "read": str(rng.choice(["cont", "rev", "mean", "osc"]))}
+    if rng.random() < 0.4:  # 进一步嵌套（depth<上限），让合成本身就能长出更深结构
+        cp["b"] = _random_comp_params(rng, depth=1)
+    return {"sig": "comp", "test": str(rng.choice(TEST_NAMES)),
+            "params": {"_comp": cp}}
+
+
 def genome_key(sig, test, params):
     """基因组的稳定字符串键（用于 leaderboard 与 tried 去重）。"""
     return f"{sig}|{test}|" + json.dumps(params, sort_keys=True)
+
+
+import zlib
+def _stable_seed(key):
+    """从基因组键派生确定性 surrogate 种子：相同 genome -> 相同 seed -> 跨 epoch 命中缓存，
+    跳过昂贵的 surrogate 重算（占单轮评估 ~60% 时间）。不同 genome -> 不同 seed -> 闸门内
+    各基因组 p 值是独立样本，BH-FDR 仍有效。比每轮随机 seed 更优：p_raw 稳定(无噪声抖动)，
+    GA 选择更干净，且缓存复用率最高。"""
+    return int(zlib.crc32(key.encode("utf-8")) % (2 ** 31 - 1)) + 1
 
 # ---------------------------------------------------------------------------
 # 3. surrogate
@@ -1579,7 +1683,9 @@ class Evolution:
 
     def __init__(self, reds, blues, rng, k_light=25, k_heavy=10, epochs=6, pop=24,
                  elites=None, frontier=None, sur_type="aaft", n_workers=0, eval_cache=None,
-                 elite_bias=None, prune_sigs=None):
+                 elite_bias=None, prune_sigs=None, oos_every_epoch=False,
+                 novelty_enabled=True, memetic=True, coalition=True,
+                 memetic_top_n=3, memetic_k=4, reflect_enabled=True):
         self.reds = reds
         self.blues = blues
         self.rng = rng
@@ -1601,6 +1707,25 @@ class Evolution:
         self.eval_cache = eval_cache                 # 可选：增量评估缓存（disk）
         # 并行度：默认 min(CPU, pop)；单核环境退化为 1
         self.n_workers = n_workers or max(1, min(_os.cpu_count() or 4, max(2, pop)))
+        # 懒算 OOS：默认仅末代计算 comp 命中率（省 5/6 重复评估），提速显著且不影响闸门
+        self.oos_every_epoch = bool(oos_every_epoch)
+        # Novelty Search：行为新颖度存档（防全 null 下种群坍缩到单一基因型）。
+        # 只影响 selection（谁进下一代），绝不影响 gate verdict / 自动合并。
+        self.novelty_archive = NS.NoveltyArchive(max_size=500, k_nn=15)
+        self.novelty_enabled = bool(novelty_enabled)  # 可由 run_cycle.py 配置关闭
+        # 反思设计层：让智能组件每轮反省「公式设计弱点」(失败率/算子利用率/坍缩/闸门通过率)，
+        # 生成可审计提案并注入下一轮搜索空间。红线：绝不旁路闸门、绝不自动合并。
+        self.reflect_enabled = bool(reflect_enabled)
+        self.reflect_injected = 0
+        # 全集算子（用于利用率缺口检测）：二元/条件 + 一元
+        self.avail_ops = sorted(set(COMP_OPS) | set(COMP_UNARY))
+        # 智能演进「配合」：局部精修(memetic, 全局GA找骨架+局部参数精修) + 公式协作(coalition, top-2 合成 comp)
+        self.memetic = bool(memetic)
+        self.coalition = bool(coalition)
+        self.memetic_top_n = int(memetic_top_n)
+        self.memetic_k = int(memetic_k)
+        self.memetic_injected = 0
+        self.coalition_injected = 0
 
     def _safe_random_genome(self, rng):
         """random_genome 的护栏包装：拒绝 prune_sigs 中的 sig（学习模块已证伪/构造伪结构）。
@@ -1634,6 +1759,56 @@ class Evolution:
             pop.append(self._safe_random_genome(self.rng))
         return pop
 
+    # ------------------------------------------------------------------
+    # 反思设计层接入：把 RD 的结构化提案翻译成候选基因组，注入下一轮。
+    # 所有候选走统一闸门评测，绝不旁路、绝不自动合并。
+    # ------------------------------------------------------------------
+    def _genome_with_op(self, op, rng):
+        """构造一棵以 op 为主算子的浅 comp 基因组（用于 boost_operator 提案）。"""
+        tree = {"op": op,
+                "a": rng.choice(BASE_SIGNALS),
+                "b": rng.choice(BASE_SIGNALS),
+                "k": int(rng.integers(1, 6)),
+                "read": rng.choice(["cont", "rev", "mean", "osc"])}
+        return {"sig": "comp", "test": rng.choice(TEST_NAMES),
+                "params": {"_comp": tree}}
+
+    def _apply_reflection(self, ep, n_tasks, n_eval, n_cached, n_failed,
+                          evals, survivors):
+        """每轮收尾：反省 → 提案 → 翻译为候选基因组（仅注入，闸门裁决）。返回候选列表。"""
+        if not self.reflect_enabled:
+            return []
+        report = RD.reflect_epoch(
+            ep, n_tasks, n_eval, n_cached, n_failed,
+            evals, survivors, self.leaderboard, self.novelty_archive,
+            self.avail_ops, list(COMP_UNARY))
+        props = RD.propose(report, self.pop)
+        RD.log_reflection(report, props)
+        cands = []
+        for p in props:
+            ptype, n = p["type"], max(1, int(p.get("n", 1)))
+            if ptype in ("inject_diverse", "novelty_boost"):
+                for _ in range(n):
+                    cands.append(self._safe_random_genome(self.rng))
+            elif ptype == "boost_operator":
+                cands.append(self._genome_with_op(p.get("op", "where"), self.rng))
+            elif ptype == "structural_mut":
+                base = self.rng.choice(survivors) if survivors else self._safe_random_genome(self.rng)
+                for _ in range(n):
+                    try:
+                        cands.append(promote_to_comp(
+                            {"sig": base.get("sig"), "test": base.get("test"),
+                             "params": copy.deepcopy(base.get("params", {}))}, self.rng))
+                    except Exception:
+                        cands.append(self._safe_random_genome(self.rng))
+            else:  # explore_bias
+                cands.append(self._safe_random_genome(self.rng))
+        self.reflect_injected += len(cands)
+        print(f"[reflect] EP{ep} 反省: 失败率={report['failure_rate']:.1%} "
+              f"唯一={report['unique_genomes']} gate_raw={report['gate_pass_raw_rate']:.1%} "
+              f"→ 提案 {len(props)} 条, 注入候选 {len(cands)} 个")
+        return cands
+
     def run(self):
         pop = self._seed_pop()
         fp = C.data_fingerprint(self.reds, self.blues) if self.eval_cache else None
@@ -1647,24 +1822,28 @@ class Evolution:
                 cached_hits = []
                 for g in to_eval:
                     gkey = genome_key(g["sig"], g["test"], g["params"])
-                    # 增量缓存：同 (基因组, 数据集指纹) 直接复用上次完整评估（严格等价，不改统计）
+                    k = self._k(TESTS[g["test"]][2])
+                    sur_type = TEST_SUR_TYPE.get(g["test"], "aaft")
+                    # 确定性 surrogate 种子：相同 genome -> 相同 seed -> 种子级缓存命中(跳过 surrogate 重算)
+                    seed = _stable_seed(gkey)
+                    # 增量缓存：同 (基因组, 数据集指纹, seed, k_sur, sur_type) 直接复用上次完整评估
+                    # （严格等价，不改统计；surrogate 结果随 seed 固定，跨 epoch 复用不污染闸门）
                     if self.eval_cache is not None:
-                        cev = self.eval_cache.get(gkey, fp)
+                        cev = self.eval_cache.get(gkey, fp, seed, k, sur_type)
                         if cev is not None:
                             ev = dict(cev)
                             ev["gkey"] = gkey
                             cached_hits.append(ev)
                             self.tried.add(gkey)
                             continue
-                    k = self._k(TESTS[g["test"]][2])
-                    seed = int(self.rng.integers(0, 2 ** 31 - 1))
-                    tasks.append((g["sig"], g["test"], g["params"],
-                                 self.reds, self.blues, k,
+                    # task 仅含小元组：数组经 cache.eval_parallel_map 的 initializer 注入子进程，
+                    # 避免 Windows spawn 下每个 task 都 pickle 整个 reds/blues（否则进程池开销爆炸）。
+                    tasks.append((g["sig"], g["test"], g["params"], k,
                                  TEST_SUR_TYPE.get(g["test"], "aaft"), seed))
-                # 跨平台并行：cache.parallel_map 默认线程池（numpy 释放 GIL，
-                # 对 surrogate 生成有真实加速；Windows 上 fork-Pool 不可用，线程池是唯一零坑路径）。
-                # 每个 task 自带 seed、内部建独立 rng，线程安全。
-                res_iter = C.parallel_map(_eval_worker, tasks, max_workers=self.n_workers)
+                # 真·多进程并行（数组经 initializer 注入，task 仅小元组；spawn 失败自动回退串行）。
+                # 每个 task 自带 seed、内部建独立 rng，进程安全。
+                res_iter = C.eval_parallel_map(tasks, self.reds, self.blues,
+                                               max_workers=self.n_workers)
                 evals = []
                 for ev in res_iter:
                     if ev is None:
@@ -1677,7 +1856,10 @@ class Evolution:
                         self.leaderboard[key] = ev
                     self.tried.add(key)
                     if self.eval_cache is not None:
-                        self.eval_cache.put(key, fp, ev)
+                        self.eval_cache.put(key, fp, ev,
+                                           _stable_seed(key),
+                                           self._k(TESTS[ev["test"]][2]),
+                                           TEST_SUR_TYPE.get(ev["test"], "aaft"))
                 # 命中缓存的基因组并入（与实时评估同等对待，参与 leaderboard 与 FDR）
                 for ev in cached_hits:
                     key = ev["gkey"]
@@ -1692,41 +1874,113 @@ class Evolution:
                 #  - above_random=False 的 comp 候选命中率贡献归零(不奖励随机波动命中)；
                 #  - 基信号不参与命中率奖励(其命中率是数据自带惯性,非公式功劳,避免 GA 退化为堆基信号)。
                 _hit_cache = {}
-                for e in evals:
-                    ek = e["gkey"]
-                    lb = self.leaderboard[ek]
-                    if lb.get("sig") == "comp":
-                        try:
-                            _acc = oos_accuracy(lb, self.reds, self.blues, self.rng,
-                                               frac=0.15, k_sur=15)
-                        except Exception:
-                            _acc = None
-                        if _acc is not None:
-                            _hit_cache[ek] = _acc
-                            lb["hit_rate"] = _acc["hit_rate"]
-                            lb["above_random"] = _acc["above_random"]
+                # 懒算 OOS：仅末代(或显式 oos_every_epoch)对 comp 算命中率，省 5/6 重复评估。
+                # 早期 epoch 的 comp 仅按结构显著性(p_raw)选择，末代补命中率用于最终排序/汇报。
+                if self.oos_every_epoch or ep == self.epochs - 1:
+                    for e in evals:
+                        ek = e["gkey"]
+                        lb = self.leaderboard[ek]
+                        if lb.get("sig") == "comp":
+                            try:
+                                _acc = oos_accuracy(lb, self.reds, self.blues, self.rng,
+                                                   frac=0.15, k_sur=15)
+                            except Exception:
+                                _acc = None
+                            if _acc is not None:
+                                _hit_cache[ek] = _acc
+                                lb["hit_rate"] = _acc["hit_rate"]
+                                lb["above_random"] = _acc["above_random"]
 
-                def _fitness(e):
-                    lb = self.leaderboard[e["gkey"]]
-                    p = lb.get("p_raw", 1.0)
-                    if lb.get("sig") == "comp":
-                        h = _hit_cache.get(e["gkey"])
-                        hr = h["hit_rate"] if (h and h.get("above_random")) else 0.0
-                        return (1.0 - p) * 0.5 + hr * 0.5
-                    return 1.0 - p  # 基信号: 仅按结构显著性
+                # ---- Novelty Search：行为指纹 + 新颖度存档（防种群坍缩）----
+                if self.novelty_enabled:
+                    _novelty_cache = {}
+                    for e in evals:
+                        try:
+                            fp = NS.behavior_fp(e, self.reds, self.blues)
+                            _novelty_cache[e["gkey"]] = fp
+                            self.novelty_archive.add(fp, {"gkey": e["gkey"],
+                                                           "sig": e.get("sig"),
+                                                           "test": e.get("test")})
+                        except Exception:
+                            _novelty_cache[e["gkey"]] = None
+                    # 先算传统 fitness（内联，避免 _fitness 定义顺序问题）
+                    def _trad_fit_only(e):
+                        lb = self.leaderboard[e["gkey"]]
+                        p = lb.get("p_raw", 1.0)
+                        if lb.get("sig") == "comp":
+                            h = _hit_cache.get(e["gkey"])
+                            hr = h["hit_rate"] if (h and h.get("above_random")) else 0.0
+                            return (1.0 - p) * 0.5 + hr * 0.5
+                        return 1.0 - p
+                    _trad_fits = [_trad_fit_only(e) for e in evals] if evals else []
+                    _alpha = NS.adaptive_alpha(_trad_fits, base_alpha=0.5, floor=0.15)
+
+                    def _fitness(e):
+                        trad = _trad_fit_only(e)
+                        # 新颖度混合（红线锁死：不碰 gate / 不自动合并）
+                        fp = _novelty_cache.get(e["gkey"])
+                        if fp is not None:
+                            nov = self.novelty_archive.novelty(fp)
+                            return NS.novelty_fitness(trad, nov, alpha=_alpha)
+                        return trad
+                else:
+                    # 纯传统 fitness（novelty 关闭时）
+                    def _fitness(e):
+                        lb = self.leaderboard[e["gkey"]]
+                        p = lb.get("p_raw", 1.0)
+                        if lb.get("sig") == "comp":
+                            h = _hit_cache.get(e["gkey"])
+                            hr = h["hit_rate"] if (h and h.get("above_random")) else 0.0
+                            return (1.0 - p) * 0.5 + hr * 0.5
+                        return 1.0 - p  # 基信号: 仅按结构显著性
 
                 evals_sorted = sorted(evals, key=_fitness, reverse=True) if evals else []
                 survivors = evals_sorted[:max(2, len(evals_sorted) // 2)]
                 base_pool = survivors if survivors else [self._safe_random_genome(self.rng) for _ in range(2)]
                 newpop = [{"sig": g["sig"], "test": g["test"],
                            "params": copy.deepcopy(g["params"])} for g in base_pool]
+                # ---- 智能演进「配合」：局部精修(memetic) + 公式协作(coalition) ----
+                # memetic: 对 top survivor 在其参数邻域做局部精修(局部 exploitation)，
+                #   把精修候选注入下一代，由统一闸门评测；全局GA找骨架、局部精修填肉，二者配合。
+                # coalition: 把 top-2 survivor 合成一棵复合公式(comp)，即「公式互相配合」。
+                # 二者都只影响 selection/种群构成，绝不旁路闸门、绝不自动合并（红线锁死）。
+                injected = []
+                if self.memetic:
+                    _top = survivors[:min(self.memetic_top_n, len(survivors))]
+                    for s in _top:
+                        for _ in range(self.memetic_k):
+                            try:
+                                ng = mutate_genome(
+                                    {"sig": s["sig"], "test": s.get("test"),
+                                     "params": copy.deepcopy(s["params"])},
+                                    self.rng, local_only=True)
+                                if ng["sig"] not in self.prune_sigs:
+                                    injected.append(ng)
+                            except Exception:
+                                pass
+                    self.memetic_injected += len(injected)
+                if self.coalition and len(survivors) >= 2:
+                    try:
+                        g1 = {"sig": survivors[0]["sig"], "test": survivors[0].get("test"),
+                              "params": copy.deepcopy(survivors[0]["params"])}
+                        g2 = {"sig": survivors[1]["sig"], "test": survivors[1].get("test"),
+                              "params": copy.deepcopy(survivors[1]["params"])}
+                        injected.append(_combine_to_comp(g1, g2, self.rng))
+                        self.coalition_injected += 1
+                    except Exception:
+                        pass
+                newpop.extend(injected)
                 while len(newpop) < self.pop:
                     if self.rng.random() < 0.5 and len(base_pool) >= 2:
                         a, b = self.rng.choice(len(base_pool), 2, replace=False)
                         ga, gb = base_pool[a], base_pool[b]
                         # 重组：交换信号映射 或 检验（保留各自参数作起点；不丢 _comp/_reorder）
                         # 兼容 comp 基因组：其 params 仅有 _comp（无 _test），缺键则跳过交换、保留原块。
-                        if self.rng.random() < 0.5:
+                        if self.rng.random() < 0.3:
+                            # 新算子：两父代【合成复合公式】(GA 自主合成深层公式，进化方向关键)
+                            # 概率独立于下方 swap/expand，让 comp 合成稳定进入种群。
+                            newpop.append(_combine_to_comp(ga, gb, self.rng))
+                        elif self.rng.random() < 0.5:
                             cp = copy.deepcopy(gb["params"])
                             if "_test" in ga["params"]:
                                 cp["_test"] = copy.deepcopy(ga["params"]["_test"])
@@ -1741,9 +1995,22 @@ class Evolution:
                         base = self.rng.choice(base_pool) if base_pool else self._safe_random_genome(self.rng)
                         if self.rng.random() < 0.3:
                             newpop.append(self._safe_random_genome(self.rng))   # 少量纯随机保多样性
+                        elif self.rng.random() < 0.25:
+                            # 新算子：基信号/浅 comp 升级为更深复合公式（推动 df_gen 上长）
+                            newpop.append(promote_to_comp(base, self.rng))
                         else:
                             newpop.append(mutate_genome(base, self.rng))
+                if len(newpop) > self.pop:
+                    newpop = newpop[:self.pop]
                 pop = newpop
+                # 反思设计层：用反省候选替换尾部等量随机填充槽，保证必进下一代评测
+                if self.reflect_enabled:
+                    n_failed = len(tasks) - len(evals) - len(cached_hits)
+                    ref_cands = self._apply_reflection(ep, len(tasks), len(evals),
+                                                       len(cached_hits), n_failed, evals, survivors)
+                    if ref_cands:
+                        k = min(len(ref_cands), len(pop))
+                        pop[-k:] = ref_cands[:k]
         return self.leaderboard, self.all_evals
 
 # ---------------------------------------------------------------------------

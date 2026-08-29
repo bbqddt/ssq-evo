@@ -223,6 +223,193 @@ def confirm_segment_z(spec, draws, confirm_n=50, seeds=(0, 1, 2, 3)):
     return mean_z, zs, confirm_n
 
 
+# ---------------- Novelty Search / 多样性维持（防全 null 下种群坍缩到单一 spec）----------------
+# 核心思想（Lehman & Stanley 2011）：
+#   不奖励"过闸"（Goodhart 红线），而是奖励行为新颖度——即预测器的输出模式与
+#   已见过的所有 spec 有多不同。在平坦 fitness 景观(all-z≈0.451)中，
+#   这提供持续选择压力，驱动 GA 广搜特征/参数空间而非收敛到局部最优。
+#
+# 红线锁死：
+#   - 新颖度只影响 selection（谁进入下一代），绝不影响紧鞘闸门(surrogate/confirm)
+#   - 不自动合并任何候选到 frontier，闸门仍是唯一仲裁
+#   - 传统 fitness(K-fold z)仍参与混合；有真信号时自动回归传统选择
+
+import copy as _copy
+
+
+def _fp_spec(spec, draws, train_end, n_sample=150):
+    """从 spec 计算行为指纹（固定长度 numpy 向量）。
+    
+    用短窗口在线评估(不跑完整 K-fold)提取输出签名：
+      fp[0..11]    : 命中序列等频分位直方图（12 bin，捕获分布形状）
+      fp[12]       : 命中率均值（有界到 [0,1]）
+      fp[13]       : 命中率标准差（对数，捕获波动）
+      fp[14]       : lag-3 自相关（时序结构代理）
+      fp[15]       : 特征激活熵（权重在各特征间分布均匀度，0~1）
+      fp[16]       : 主导特征 L2 比例（最大特征权重占比，0~1）
+      fp[17]       : 学习率（对数归一化）
+      fp[18]       : 窗口大小归一化（/300）
+      fp[19]       : 权重稀疏度（|w|<threshold 的比例，0~1）
+    """
+    NBINS = 12
+    FP_DIM = NBINS + 8  # = 20
+    fp = np.zeros(FP_DIM, dtype=np.float64)
+
+    # 快速在线评估（短窗口，仅用于指纹，不影响适应度）
+    try:
+        red_hits, _, n = online_eval(spec, draws,
+                                     start=max(200, train_end - n_sample),
+                                     end=train_end, learn=False)
+        hits = np.array(red_hits, dtype=float)
+    except Exception:
+        return fp  # 全零指纹（自然聚在一起，novelty 低）
+
+    if len(hits) < 10:
+        return fp
+
+    # 1. 命中序列分位直方图
+    if len(hits) > NBINS:
+        edges = np.percentile(hits, np.linspace(0, 100, NBINS + 1))
+        fp[:NBINS] = np.histogram(hits, bins=edges)[0].astype(float)
+        s = fp[:NBINS].sum()
+        if s > 0:
+            fp[:NBINS] /= s
+    else:
+        fp[0] = 1.0
+
+    # 2. 命中率统计
+    mu = hits.mean()
+    sd = hits.std() + 1e-12
+    fp[12] = float(np.clip(mu / 6.0, 0.0, 1.0))     # 6=RED_PICK 上界
+    fp[13] = float(np.log(sd + 1e-12))
+
+    # 3. 时序结构: lag-3 ACF
+    if len(hits) > 5:
+        xc = hits - mu
+        var = (xc ** 2).sum()
+        if var > 0:
+            fp[14] = float((xc[:-3] * xc[3:]).sum() / var)
+
+    # 4. 特征激活模式（用 spec 结构 + 模拟权重分布估算）
+    feats = spec.get("features", [])
+    n_feats = max(len(feats), 1)
+    # 模拟：假设各特征的权重 L2 遵循某种分布（实际需跑一次在线学习才准，
+    # 但为速度用 spec 启发式：lr 高→权重分散→熵高; window 大→更平滑→熵低）
+    lr = spec.get("lr", 0.1)
+    win = spec.get("window", 200)
+    # 特征数越多 → 单特征平均权重越小 → 熵越高
+    feat_entropy = 0.0
+    base_p = 1.0 / n_feats
+    for f in feats:
+        # 不同特征类型有不同先验权重（启发式）
+        p = base_p
+        if f == "transition":
+            p *= 1.8          # 转移矩阵通常信息量高
+        elif f == "omission":
+            p *= 1.3
+        elif f == "zone_drift":
+            p *= 1.0
+        elif f == "symdiff":
+            p *= 0.7
+        feat_entropy -= p * np.log(p + 1e-30)
+    feat_entropy /= np.log(max(n_feats, 2))  # 归一化到 [0,1]
+    fp[15] = float(np.clip(feat_entropy, 0.0, 1.0))
+
+    # 5. 主导特征比例
+    if n_feats >= 1:
+        dominant = max(base_p * (1.8 if feats[0] == "transition" else
+                                 1.3 if feats[0] == "omission" else
+                                 1.0 if feats[0] == "zone_drift" else 0.7),
+                       0.01)
+        total_p = sum(base_p * (
+            1.8 if ff == "transition" else 1.3 if ff == "omission" else
+            1.0 if ff == "zone_drift" else 0.7) for ff in feats)
+        fp[16] = float(np.clip(dominant / max(total_p, 1e-10), 0.0, 1.0))
+
+    # 6. 参数归一化
+    fp[17] = float(np.clip(np.log(lr + 1e-10) / np.log(0.5), -1.0, 1.0))
+    fp[18] = float(np.clip(win / 300.0, 0.0, 1.0))
+
+    # 7. 稀疏度（特征少 → 更稀疏）
+    fp[19] = float(np.clip(1.0 - n_feats / len(FEATURES), 0.0, 1.0))
+
+    return fp
+
+
+class _PredNoveltyArchive:
+    """evolve_predictor 专用新颖度存档（capped + kNN）。"""
+
+    def __init__(self, max_size=300, k_nn=7):
+        self.max_size = max_size
+        self.k_nn = k_nn
+        self._fps = []
+        self._matrix = None
+
+    def add(self, fp):
+        self._fps.append(np.asarray(fp, dtype=np.float64).copy())
+        self._matrix = None
+        while len(self._fps) > self.max_size:
+            self._fps.pop(0)
+
+    def novelty(self, fp):
+        """返回平均 k-NN 距离（越高=越新颖）。"""
+        fp = np.asarray(fp, dtype=np.float64)
+        n = len(self._fps)
+        if n < self.k_nn:
+            return float('inf')
+        arr = np.array(self._fps)
+        dists = np.sqrt(((arr - fp[None, :]) ** 2).sum(axis=1))
+        k_nearest = np.partition(dists, min(self.k_nn - 1, len(dists) - 1))[:self.k_nn]
+        return float(np.mean(k_nearest))
+
+    def diversity(self):
+        """存档内平均成对距离（种群健康指标）。"""
+        n = len(self._fps)
+        if n < 2:
+            return 0.0
+        arr = np.array(self._fps)
+        # 采样避免 O(n²) 爆炸
+        sample = min(n, 100)
+        idx = np.random.choice(n, sample, replace=False)
+        sub = arr[idx]
+        total = 0.0
+        count = 0
+        for i in range(sample):
+            diff = sub[i + 1:] - sub[i]
+            total += np.sqrt((diff ** 2).sum(axis=1)).sum()
+            count += len(sub) - i - 1
+        return float(total / max(count, 1))
+
+    def __len__(self):
+        return len(self._fps)
+
+
+def _adaptive_alpha(z_scores, base=0.5, floor=0.15):
+    """z-score 方差极小时（平坦景观）降 alpha 让新颖度主导。"""
+    arr = np.array(z_scores, dtype=float)
+    if arr.size < 2:
+        return base
+    v = arr.var()
+    if v < 1e-6:           # 全相同 z（如全是 0.451）
+        return floor
+    if v < 0.001:
+        t = (v - 1e-6) / (0.001 - 1e-6)
+        return floor + (base - floor) * t
+    return base
+
+
+def _blend_fitness(trad_z, nov_score, alpha):
+    """混合 fitness = α·传统z归一化 + (1-α)·新颖度归一化。"""
+    # 传统 z 归一化（假设范围 [-1, 3]）
+    t_norm = np.clip((trad_z + 1.0) / 4.0, 0.0, 1.0)
+    # 新颖度归一化
+    if np.isinf(nov_score) or nov_score > 1e9:
+        n_norm = 1.0
+    else:
+        n_norm = np.clip(nov_score / 2.0, 0.0, 1.0)  # 经验范围 [0, 2]
+    return float(alpha * t_norm + (1 - alpha) * n_norm)
+
+
 # ---------------- GA 进化 ----------------
 def random_spec(rng):
     fns = list(FEATURES.keys())
@@ -301,6 +488,10 @@ def evolve(generations=20, pop=20, seed=20260823, workers=0, data=None, out=None
     while len(pop_specs) < pop:
         pop_specs.append(random_spec(rng))
 
+    # ---- Novelty Search 初始化（防全 null 下种群坍缩）----
+    nov_archive = _PredNoveltyArchive(max_size=300, k_nn=7)
+    novelty_enabled = True  # 可通过参数控制，默认开启
+
     if workers <= 0:
         workers = max(1, min(mp.cpu_count(), pop))
     t0 = time.time()
@@ -322,13 +513,40 @@ def evolve(generations=20, pop=20, seed=20260823, workers=0, data=None, out=None
             scored.sort(key=lambda x: -x[0])
         gen_best = scored[0][0]
         best_gen_z = max(best_gen_z, gen_best)
-        new_pop = [json.loads(json.dumps(scored[0][1]))]
+
+        # ---- Novelty Search：行为指纹 + 新颖度混合 selection ----
+        if novelty_enabled:
+            # 提取本轮所有 z-score 用于自适应 alpha
+            raw_zs = [z for z, s in scored]
+            _alpha = _adaptive_alpha(raw_zs, base=0.5, floor=0.15)
+
+            # 为每个 spec 计算行为指纹 + 新颖度
+            nov_scored = []
+            for z, spec in scored:
+                fp = _fp_spec(spec, draws, train_end)
+                nov = nov_archive.novelty(fp)
+                nov_archive.add(fp)  # 入存档（查询后加入，避免自己和自己比）
+                blended = _blend_fitness(z, nov, _alpha)
+                nov_scored.append((blended, z, spec, nov))
+
+            # 按混合 fitness 降序排列（新颖度打破平局/平坦景观）
+            nov_scored.sort(key=lambda x: -x[0])
+            gen_best_blended = nov_scored[0][0]
+            gen_best_novelty = nov_scored[0][3]
+        else:
+            nov_scored = [(0.0, z, s, 0.0) for z, s in scored]
+            _alpha = 1.0
+            gen_best_blended = 0.0
+            gen_best_novelty = 0.0
+
+        new_pop = [json.loads(json.dumps(nov_scored[0][2]))]  # elite: 混合最佳
         while len(new_pop) < pop:
-            parent = scored[rng.randrange(min(10, len(scored)))][1]
+            parent = nov_scored[rng.randrange(min(10, len(nov_scored)))][2]
             new_pop.append(mutate(parent, rng))
         pop_specs = new_pop
-        print("[evolve] gen %d/%d K折稳健最佳z=%.3f (已用%d核, 累计%.1fs)" % (
-            g + 1, generations, gen_best, workers, time.time() - t0))
+        print("[evolve] gen %d/%d K折稳健最佳z=%.3f 混合fit=%.3f α=%.2f 新颖度=%.4f 存档=%d (核=%d, %.1fs)" % (
+            g + 1, generations, gen_best, gen_best_blended, _alpha,
+            gen_best_novelty, len(nov_archive), workers, time.time() - t0))
 
     best_spec = scored[0][1]
     if out:

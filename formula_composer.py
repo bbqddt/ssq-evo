@@ -18,15 +18,22 @@ import copy
 import numpy as np
 
 # 复用 engine_core 已有的复合公式构造零件
+import engine_core as E
 from engine_core import (
     COMP_OPS, COMP_UNARY, COMP_OPS_NEST,
-    _random_comp_params, _mutate_comp, BASE_SIGNALS,
+    _random_comp_params, _mutate_comp,
 )
 
-# MAX_DEPTH 与 engine_core._MAX_COMP_DEPTH 对齐：_operand 现允许 depth 到 _MAX_COMP_DEPTH(=4)，
-# 即 comp 公式树最多支持 depth=3（gen = depth+1 = 4）。超出(_operand depth>=4)返回 None 不可评估。
-# 公式代数演进的物理上限从 gen=2 放开到 gen=4（"基信号组合"→"组合的组合"→"组合的组合的组合"）。
-MAX_DEPTH = 4
+# 注册原创公式基元（formula_research.register 内部同时调用 RZ.register），
+# 使 E.BASE_SIGNALS 字母表含 representation_zoo 代数基元 + 本项目的原创基元，
+# GA 每轮自动可用。幂等，可安全在模块加载时调用。
+import formula_research as FR
+FR.register()
+
+# MAX_DEPTH 动态对齐 engine_core._MAX_COMP_DEPTH：改 engine_core 一处即可，composer 自动跟随。
+# 当前 _operand 允许 depth 到 _MAX_COMP_DEPTH(=8)，即 comp 公式树最多支持 depth=7（gen = depth+1 = 8）。
+# 超出(_operand depth>=_MAX_COMP_DEPTH)返回 None 不可评估。公式代数演进物理上限 gen=2 → 8（更大表达力）。
+MAX_DEPTH = E._MAX_COMP_DEPTH
 
 def _comp_genome(cp, test="mi_max"):
     """把复合公式树 cp 包装成 GA 基因组（sig='comp'）。"""
@@ -83,8 +90,9 @@ def _make_depth1(rng):
     """构造一颗深度可达 max_depth-1 的复合子树（默认 depth=1，但 b 可再嵌套）。
     基信号名严格取 BASE_SIGNALS 中"1D 序列"子集（排除 blue/blue_resid 等 2D 信号，
     否则 comp 产物为 2D，检验函数期望 1D → _build_comp 返回 None 不可评估）。
+    动态读 engine_core.BASE_SIGNALS（register() 会刷新该引用，须运行时取而非导入快照）。
     所有字符串强制转原生 str（避免 numpy rng.choice 返回 np.str_ 导致解析失败）。"""
-    _1D_BASES = [s for s in BASE_SIGNALS if s not in ("blue", "blue_resid")]
+    _1D_BASES = [s for s in E.BASE_SIGNALS if s not in ("blue", "blue_resid")]
 
     def _leaf():
         return str(rng.choice(_1D_BASES))
@@ -148,11 +156,21 @@ class FormulaComposer:
         """
         # 合并精英树 + 保种槽树作为 breed 起点（保种槽保证跨轮连续性）
         sources = list(elite_comps) + list(self._persisted)
+        # 外部框架种子注入（gplearn 符号回归产出，消费式读取）：让框架发现的公式组合
+        # 成为 GA 起点，扩大搜索空间。绝不在本模块内判定「过闸」——最终候选仍须过
+        # engine_core 统一闸门（红线：无监督优化器绝不以过闸为目标自动合并）。
+        try:
+            import seed_bridge as _SB
+            _ext = _SB.load_seeds_consume()
+            if _ext:
+                sources = list(_ext) + sources
+        except Exception:
+            pass
         if not sources:
             return self.seed_gen1(n=n)
         cur_d = max(_depth_of(c) for c in sources)
         # 本代应达到的嵌套深度：受 _operand 限制，depth 最大为 max_depth-1（gen=max_depth）。
-        # 物理上限从 gen=2 放开到 gen=4（depth=3），让公式树长更复杂结构。
+        # 物理上限从 gen=2 放开到 gen=max_depth（当前=6，depth=5），让公式树长更复杂结构。
         target_d = min(cur_d + 1, self.max_depth - 1)
         next_gen = []
 
@@ -184,13 +202,14 @@ class FormulaComposer:
                 child = _nest_expand(child, self.rng)
                 if _depth_of(child) >= self.max_depth - 1:
                     break
-            if _depth_of(child) <= self.max_depth - 1:  # 只收 depth<=3（gen<=4）的树
+            if _depth_of(child) <= self.max_depth - 1:  # 只收 depth<=max_depth-1（gen<=max_depth）的树
                 next_gen.append(child)
 
         self.population = next_gen[:n]
         # 清洗：递归把 2D 基信号（blue/blue_resid）替换成 1D 信号，避免 comp 产物为 2D
         # 导致 _build_comp/检验返回 None（不可评估的废树）。1D 子集与 _make_depth1 一致。
-        _1D = [s for s in BASE_SIGNALS if s not in ("blue", "blue_resid")]
+        # 动态读 E.BASE_SIGNALS（含 formula_research 注册的原创基元）。
+        _1D = [s for s in E.BASE_SIGNALS if s not in ("blue", "blue_resid")]
         for cp in self.population:
             _sanitize_tree(cp, self.rng, _1D)
         # gen = 本代最大嵌套深度 + 1（代际演进的物理解释，随 breed 累积上长）
