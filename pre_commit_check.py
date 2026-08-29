@@ -118,6 +118,19 @@ def check_newline_at_eof():
     return True, "OK"
 
 
+def check_no_ghost_modules():
+    """Catch import references to .py files that don't exist (ghost modules).
+    These cause Docker build failure at the smoke-test step."""
+    gh_path = os.path.join(PROJECT_DIR, "ghost_hunter.py")
+    if not os.path.isfile(gh_path):
+        return True, "OK: ghost_hunter.py not found (skip)"
+    r = subprocess.run([sys.executable, gh_path], cwd=PROJECT_DIR,
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return False, f"Ghost modules found:\n{r.stdout}"
+    return True, r.stdout.strip()
+
+
 def main():
     print("=" * 55)
     print("PRE-COMMIT CHECK - run before git commit")
@@ -135,6 +148,7 @@ def main():
         ("Container version match", check_no_stale_deployment),
         ("No untracked .py orphans", check_untracked_critical),
         ("File format sanity", check_newline_at_eof),
+        ("No ghost module imports", check_no_ghost_modules),
     ]
 
     results = []
