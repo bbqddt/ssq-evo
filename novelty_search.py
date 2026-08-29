@@ -21,6 +21,7 @@ novelty_search.py —— Novelty Search / 多样性维持模块
 """
 import numpy as np
 import engine_core as E
+import paths
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +240,7 @@ def adaptive_alpha(fitness_values, base_alpha=0.5, floor=0.15):
 if __name__ == "__main__":
     # ---- 冒烟测试 ----
     import data as D
-    m = D.load_master("D:/ssq_evo_data/ssq_master.csv")
+    m = D.load_master(paths.master_csv())
     reds, blues, issues = D.to_arrays(m)
     print("[novelty] 载入 %d 期" % reds.shape[0])
 

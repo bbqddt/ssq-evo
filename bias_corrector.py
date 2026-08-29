@@ -31,8 +31,9 @@ import json
 import datetime
 
 import learning_contract as LC
+import paths
 
-DATA_DIR = os.environ.get("DATA_DIR", "D:/ssq_evo_data")
+DATA_DIR = paths.DATA_DIR
 FAILURE_TAXONOMY_FILE = os.path.join(DATA_DIR, "failure_taxonomy.json")
 AVOIDANCE_PRIOR_FILE = os.path.join(DATA_DIR, "avoidance_prior.json")
 INGEST_FATE_FILE = os.path.join(DATA_DIR, "ingest_fate.jsonl")

@@ -13,8 +13,10 @@ import json
 import os
 import datetime
 from collections import Counter
+import ssq_log
+import paths
 
-REFLECTION_LOG = os.path.join(os.environ.get("DATA_DIR", r"D:/ssq_evo_data"),
+REFLECTION_LOG = os.path.join(paths.DATA_DIR,
                               "reflection_log.jsonl")
 
 
@@ -190,8 +192,8 @@ def log_reflection(report, proposals, path=None):
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    except Exception as _e:
+        ssq_log.log_exception("reflective_designer", _e, "reflective_designer.py:193 silent-except")
 
 
 def summarize_log(path=REFLECTION_LOG, last_n=20):

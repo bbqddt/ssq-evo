@@ -24,8 +24,9 @@ import os
 import sys
 import json
 import argparse
+import paths
 
-DATA_DIR = os.environ.get("DATA_DIR", "D:/ssq_evo_data")
+DATA_DIR = paths.DATA_DIR
 PENDING_FILE = "pending_primitives.json"
 APPROVED_FILE = "approved_primitives.json"
 

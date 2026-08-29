@@ -9,6 +9,8 @@ frontier.json；下一轮读回作为精英种子与去重依据。这样迭代�
 import json
 import os
 
+import ssq_log
+
 
 def load_frontier(DATA_DIR):
     p = os.path.join(DATA_DIR, "frontier.json")
@@ -22,8 +24,8 @@ def load_frontier(DATA_DIR):
                 try:
                     import shutil
                     shutil.copy2(p, bad)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    ssq_log.log_exception("frontier", _e, "frontier.py:27 silent-except")
             print(f"[frontier] CRITICAL: frontier.json 损坏({e})，备份到 {bad}，从空 frontier 重启")
             f = None
         if f is not None:
@@ -39,19 +41,50 @@ def load_frontier(DATA_DIR):
             "footprints": [], "gen": 0, "cycles_since_signal": 0}
 
 
+# 无界增长封顶：tried 每轮追加，不封顶会让 frontier.json 无限膨胀
+# （实测 4600+ 条仍在涨），最终拖慢每轮 IO 并撑爆内存/磁盘。
+_CAP = {"tried": 20000, "best_z_history": 2000, "acc_history": 2000,
+        "footprints": 200, "elites": 200}
+
+
+def _cap_history(f):
+    """把历史类列表截断到上限（保留最近的）——返回是否发生了截断。"""
+    trimmed = False
+    for key, cap in _CAP.items():
+        v = f.get(key)
+        if isinstance(v, list) and len(v) > cap:
+            f[key] = v[-cap:]
+            trimmed = True
+    return trimmed
+
+
 def save_frontier(DATA_DIR, f):
     p = os.path.join(DATA_DIR, "frontier.json")
     tmp = p + ".tmp"
     try:
+        _cap_history(f)
+    except Exception as _e:
+        ssq_log.log_exception("frontier", _e, "frontier.py:66 silent-except")
+    try:
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(f, fh, ensure_ascii=False, indent=2)
-        fh.flush()
-        os.fsync(fh.fileno())
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, p)
-    except Exception:
+        return
+    except Exception as e:
+        # flush/fsync 必须在 with 内；此处只作极端兜底（如磁盘满）
+        ssq_log.error("frontier.save", "atomic write failed, fallback", e)
+    try:
         json.dump(f, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-        if os.path.exists(tmp):
+    except Exception as e:
+        ssq_log.critical("frontier.save", "frontier.json WRITE FAILED (state loss)", e)
+        raise
+    if os.path.exists(tmp):
+        try:
             os.remove(tmp)
+        except Exception as _e:
+            ssq_log.log_exception("frontier", _e, "frontier.py:86 silent-except")
 
 
 def update_frontier(frontier, leaderboard, tried_set, elite_k=12):

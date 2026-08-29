@@ -27,6 +27,7 @@ import data as D
 import run_axes as RA
 import frontier as FR
 import engine_core as E
+import ssq_log
 
 DATA_DIR = os.environ.get("DATA_DIR", "D:/ssq_evo_data")
 CAND_FILE = "candidates.json"
@@ -86,8 +87,8 @@ def fetch_candidates(local_path=None):
             try:
                 with open(os.path.join(DATA_DIR, CAND_FILE), "w", encoding="utf-8") as fp:
                     json.dump(blob, fp, ensure_ascii=False)
-            except Exception:
-                pass
+            except Exception as _e:
+                ssq_log.log_exception("ingest_candidates", _e, "ingest_candidates.py:89 silent-except")
             return blob
         print("[ingest] API 返回异常（无 base64 content）")
         return None

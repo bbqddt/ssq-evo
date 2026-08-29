@@ -26,6 +26,7 @@ import json
 import hashlib
 import threading
 from concurrent.futures import ThreadPoolExecutor
+import ssq_log
 
 # 评估缓存逻辑版本：evaluate() 的 surrogate 生成/统计逻辑一旦变更，必须 +1，
 # 使旧缓存键全部失效（旧逻辑产出的 eval 不应被新逻辑复用，否则静默返回陈旧结果）。
@@ -117,8 +118,8 @@ class EvalCache:
                 with open(self.path, "w", encoding="utf-8") as f:
                     json.dump(self._mem, f, ensure_ascii=False)
                 self._dirty = 0
-            except Exception:
-                pass
+            except Exception as _e:
+                ssq_log.log_exception("cache", _e, "cache.py:120 silent-except")
 
     def stats(self):
         tot = self.hits + self.misses
@@ -211,8 +212,8 @@ def eval_parallel_map(tasks, reds, blues, max_workers=None):
             if _EVAL_POOL is not None:
                 try:
                     _EVAL_POOL.terminate()
-                except Exception:
-                    pass
+                except Exception as _e:
+                    ssq_log.log_exception("cache", _e, "cache.py:214 silent-except")
             # maxtasksperchild：每个 worker 处理 N 个任务后自动回收重建，防止 24x7 长时
             # 运行下 numpy/scipy 内存碎片化导致 worker 内存只增不减（实测长跑 daemon 会爬升）。
             # 重建开销极小（仅重新 import），换来内存长期稳定。Windows 上 forkserver/loky 不可用，
@@ -233,7 +234,7 @@ def close_eval_pool():
     if _EVAL_POOL is not None:
         try:
             _EVAL_POOL.terminate()
-        except Exception:
-            pass
+        except Exception as _e:
+            ssq_log.log_exception("cache", _e, "cache.py:236 silent-except")
         _EVAL_POOL = None
         _EVAL_POOL_DATA_ID = None

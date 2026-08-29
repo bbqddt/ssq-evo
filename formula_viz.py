@@ -22,6 +22,7 @@ import numpy as np
 
 import engine_core as E
 import diff_formula as DF
+import paths
 
 
 # ---------------------------------------------------------------------------
@@ -262,8 +263,9 @@ def to_html(recs, meta=None):
             .replace("__LEGEND__", legend))
 
 
-def emit(reds, blues, rng, out_dir="D:/ssq_evo_data", confirm=True, n_candidates=8):
+def emit(reds, blues, rng, out_dir=None, confirm=True, n_candidates=8):
     """跑 diff_search + 渲染 + 写 JSON/HTML。返回记录列表。"""
+    out_dir = out_dir or paths.DATA_DIR
     results = DF.run_diff_search(reds, blues, rng, n_candidates=n_candidates,
                                  confirm=confirm, discovery_frac=0.7, k_sur_opt=40, n_steps=10)
     recs = build_records(results)
@@ -285,7 +287,7 @@ def emit(reds, blues, rng, out_dir="D:/ssq_evo_data", confirm=True, n_candidates
 
 def main():
     import data as D
-    path = "D:/ssq_evo_data/ssq_master.csv"
+    path = paths.master_csv()
     m = D.load_master(path)
     if not m:
         print("[formula_viz] 未找到真实数据，退出")

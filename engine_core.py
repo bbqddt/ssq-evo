@@ -24,6 +24,7 @@ import numpy as np
 import cache as C   # 增量缓存 + 跨平台并行调度
 import novelty_search as NS  # 多样性维持 / novelty search（防全 null 下种群坍缩）
 import reflective_designer as RD  # 反思设计层：智能组件每轮反省公式设计弱点（可审计、不旁路闸门）
+import ssq_log
 
 # ---------------------------------------------------------------------------
 # 1. 信号映射 (signal maps)
@@ -1956,8 +1957,8 @@ class Evolution:
                                     self.rng, local_only=True)
                                 if ng["sig"] not in self.prune_sigs:
                                     injected.append(ng)
-                            except Exception:
-                                pass
+                            except Exception as _e:
+                                ssq_log.log_exception("engine_core", _e, "engine_core.py:1959 silent-except")
                     self.memetic_injected += len(injected)
                 if self.coalition and len(survivors) >= 2:
                     try:
@@ -1967,8 +1968,8 @@ class Evolution:
                               "params": copy.deepcopy(survivors[1]["params"])}
                         injected.append(_combine_to_comp(g1, g2, self.rng))
                         self.coalition_injected += 1
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        ssq_log.log_exception("engine_core", _e, "engine_core.py:1970 silent-except")
                 newpop.extend(injected)
                 while len(newpop) < self.pop:
                     if self.rng.random() < 0.5 and len(base_pool) >= 2:
@@ -2440,8 +2441,8 @@ def cross_validate_null(top, reds, blues, rng, frac=0.2, k_sur=25):
                             sur_type="twin", params=top.get("params"))
             if ev_t is not None:
                 res["twin"] = float(ev_t["p_raw"])
-        except Exception:
-            pass
+        except Exception as _e:
+            ssq_log.log_exception("engine_core", _e, "engine_core.py:2443 silent-except")
     res["primary"] = res.get(primary_type)
     # consistent 要求：primary/aaft/iaaft 全显著；若算了 twin 也必须显著（更严）
     vals = [res.get("primary"), res.get("aaft"), res.get("iaaft")]

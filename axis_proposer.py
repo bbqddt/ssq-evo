@@ -34,9 +34,10 @@ import numpy as np
 import engine_core as E
 import run_axes as RA
 import learning_contract as LC
+import paths
 
 
-DATA_DIR = os.environ.get("DATA_DIR", "D:/ssq_evo_data")
+DATA_DIR = paths.DATA_DIR
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """SQLite 持久化：每轮 run 摘要 + 每个算子评估 + 全局 leaderboard。"""
 import os, sqlite3, datetime, json
+import ssq_log
 
 
 def open_db(path):
@@ -15,8 +16,8 @@ def open_db(path):
     # 增量迁移：新增 coverage 列（已存在则忽略）
     try:
         cur.execute("ALTER TABLE runs ADD COLUMN coverage INTEGER")
-    except sqlite3.OperationalError:
-        pass
+    except sqlite3.OperationalError as _e:
+        ssq_log.log_exception("store", _e, "store.py:18 silent-except")
     cur.execute("""CREATE TABLE IF NOT EXISTS evals(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         run_id INTEGER, gen INTEGER, sig TEXT, test TEXT, tier TEXT, direction TEXT,

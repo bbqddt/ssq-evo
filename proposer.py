@@ -37,6 +37,7 @@ from abc import ABC, abstractmethod
 
 import firewall as FW
 import engine_core as E
+import ssq_log
 
 
 # ---------------------------------------------------------------------------
@@ -204,8 +205,8 @@ class HypothesisGenerator(Proposer):
             try:
                 ng = E.mutate_genome(dict(g), rng)
                 genomes.append(ng)
-            except Exception:
-                pass
+            except Exception as _e:
+                ssq_log.log_exception("proposer", _e, "proposer.py:207 silent-except")
 
         # 2. 组合两个精英信号成复合公式（comp）——真正的"公式研发/套公式"
         for _ in range(self.n_combine):

@@ -17,11 +17,13 @@
 """
 import os, csv, math, argparse
 import numpy as np
+import paths
 
 RED_N, RED_PICK, BLUE_N = 33, 6, 16
 HERE = os.path.dirname(os.path.abspath(__file__))
-MASTER = os.path.join(HERE, "D:/ssq_evo_data/ssq_master.csv")
-SNAP = os.path.join(HERE, "data/ssq_history.csv")
+_DATA_DIR = paths.DATA_DIR
+MASTER = os.path.join(_DATA_DIR, "ssq_master.csv")
+SNAP = os.path.join(_DATA_DIR, "ssq_history.csv")
 
 
 def load_draws(path=None):

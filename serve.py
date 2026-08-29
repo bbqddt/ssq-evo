@@ -10,6 +10,7 @@ serve.py —— 7x24 监控看板 (仅用标准库，无第三方依赖)
 """
 import os, json, sqlite3, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import ssq_log
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("DATA_DIR", HERE)
@@ -155,8 +156,8 @@ def main():
     global PORT
     try:
         PORT = json.load(open(os.path.join(HERE, "config.json"), encoding="utf-8"))["http_port"]
-    except Exception:
-        pass
+    except Exception as _e:
+        ssq_log.log_exception("serve", _e, "serve.py:158 silent-except")
     srv = HTTPServer(("0.0.0.0", PORT), H)
     print(f"[serve] dashboard on http://localhost:{PORT}")
     srv.serve_forever()

@@ -22,6 +22,7 @@ import json
 import glob
 import datetime
 import subprocess
+import ssq_log
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("DATA_DIR", "D:/ssq_evo_data")
@@ -226,8 +227,8 @@ def check_df_gen_divergence(frontier, daemon_log):
                     "daemon.log / frontier.json", 0,
                     "SUGGEST: 以 frontier.json 持久值为准",
                 ))
-        except Exception:
-            pass
+        except Exception as _e:
+            ssq_log.log_exception("meta_audit", _e, "meta_audit.py:229 silent-except")
     return findings
 
 
@@ -242,8 +243,8 @@ def check_metric_drift(state):
                 "state.json:pick_p", 0,
                 "SUGGEST: 汇报时严格区分'边缘样本外信号'与'确认准确率'",
             ))
-    except Exception:
-        pass
+    except Exception as _e:
+        ssq_log.log_exception("meta_audit", _e, "meta_audit.py:245 silent-except")
     return findings
 
 
@@ -285,8 +286,8 @@ def main():
     if dlog.strip():
         try:
             digest_last = json.loads(dlog.strip().splitlines()[-1])
-        except Exception:
-            pass
+        except Exception as _e:
+            ssq_log.log_exception("meta_audit", _e, "meta_audit.py:288 silent-except")
     daemon_log = read_container_text("/app/data/daemon.log")
 
     checks = [

@@ -9,12 +9,12 @@ run_cycle.py —— 一次完整演化周期
 import os, sys, json, argparse, datetime, time
 import numpy as np
 
+import paths
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-# DATA_DIR: 优先用环境变量(Docker 部署传 /app/data)；未设置时默认 D:\ssq_evo_data(本机全在 D 盘，不写 C)
-DATA_DIR = os.environ.get("DATA_DIR")
-if not DATA_DIR:
-    _d = r"D:\ssq_evo_data"
-    DATA_DIR = _d if os.path.isdir(_d) else HERE
+# DATA_DIR 统一由 paths 模块解析：env DATA_DIR > 宿主机候选 > 项目根/data。
+# 容器内部署时 compose 传 /app/data；本文件不再自行拼任何盘符路径。
+DATA_DIR = paths.DATA_DIR
 os.makedirs(DATA_DIR, exist_ok=True)
 DIGEST = os.path.join(DATA_DIR, "daily_digest.jsonl")
 sys.path.insert(0, HERE)
@@ -32,6 +32,8 @@ import proposer as PR
 import scoring as SC
 import formula_composer as FC
 import watchdog_mode as WD
+import ssq_log
+import paths
 
 MASTER = os.path.join(DATA_DIR, "ssq_master.csv")
 DB = os.path.join(DATA_DIR, "ssq_evo.db")
@@ -46,14 +48,26 @@ def atomic_write_json(path, obj):
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(obj, f, ensure_ascii=False, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
+            f.flush()          # 必须在 with 内：with 外 f 已关闭 → ValueError
+            os.fsync(f.fileno())
         os.replace(tmp, path)  # POSIX/Windows 均原子
-    except Exception:
+        return
+    except Exception as e:
+        # 只有极端情况才到这里（磁盘满/只读卷/fsync 不支持）
+        ssq_log.error("atomic_write_json", f"atomic write failed: {path}", e)
+    try:
         # 回退非原子写（兼容性兜底）
         json.dump(obj, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-        if os.path.exists(tmp):
+    except Exception as e:
+        ssq_log.critical("atomic_write_json", f"WRITE FAILED (state loss): {path}", e)
+        raise
+    if os.path.exists(tmp):
+        try:
             os.remove(tmp)
+        except Exception as _e:
+            ssq_log.log_exception("run_cycle", _e, "run_cycle.py:67 silent-except")
+
+
 STATE = os.path.join(DATA_DIR, "state.json")
 
 # ---- 可调参数（部署时可改 config.json）----
@@ -145,8 +159,8 @@ def self_check(state, acc, cfg):
             if cv is not None and rv is not None and cv != rv:
                 warns.append(f"配置漂移: {key} YAML源={cv} vs 运行时={rv}(config.json 可能覆盖了 YAML)")
                 score += 2
-    except Exception:
-        pass
+    except Exception as e:
+        warns.append(f"自检-配置漂移检测异常: {e}")
 
     # 3) Dockerfile COPY 完整性（只检查本项目 .py 文件是否漏拷）
     df = os.path.join(HERE, "Dockerfile")
@@ -166,8 +180,8 @@ def self_check(state, acc, cfg):
             if missing_prod:
                 warns.append(f"Dockerfile 漏拷生产文件: {missing_prod}")
                 score += len(missing_prod) * 2
-        except Exception:
-            pass
+        except Exception as e:
+            warns.append(f"自检-Dockerfile检测异常: {e}")
 
     # 4) best_q 漂移检测（读最近快照）
     try:
@@ -188,8 +202,8 @@ def self_check(state, acc, cfg):
                         f"best_q 剧烈漂移: 当前={cq:.4f}, 近5轮均值={mq:.4f}"
                         f"(搜索前沿未收敛或过拟合)")
                     score += 1
-    except Exception:
-        pass
+    except Exception as e:
+        warns.append(f"自检-best_q漂移检测异常: {e}")
 
     # 5) 结构 vs OOS 矛盾检测
     bq = state.get("best_q", 1)
@@ -247,8 +261,8 @@ def artifact_prone_signals(N, cfg, candidate_sigs=None):
             d = json.load(open(cache_path, encoding="utf-8"))
             if d.get("N") == N:
                 known_prone = set(d.get("signals", []))
-    except Exception:
-        pass
+    except Exception as _e:
+        ssq_log.log_exception("run_cycle", _e, "run_cycle.py:250 silent-except")
     import representation_zoo as RZ
     import run_axes as RA
     RZ.register()
@@ -275,8 +289,8 @@ def artifact_prone_signals(N, cfg, candidate_sigs=None):
     try:
         json.dump({"N": N, "signals": list(known_prone)},
                   open(cache_path, "w", encoding="utf-8"))
-    except Exception:
-        pass
+    except Exception as _e:
+        ssq_log.log_exception("run_cycle", _e, "run_cycle.py:278 silent-except")
     return known_prone
 
 
@@ -287,8 +301,8 @@ def load_cfg():
         sys.path.insert(0, HERE)
         from configs import load_engine_config
         cfg.update(load_engine_config())
-    except Exception:
-        pass
+    except Exception as _e:
+        ssq_log.log_exception("run_cycle", _e, "run_cycle.py:290 silent-except")
     # 2) 兼容旧 config.json（仅部署键如 http_port/schedule_hours 应留在此；
     #    引擎键若仍存在会覆盖 YAML，便于平滑迁移）
     p = os.path.join(DATA_DIR, "config.json")
@@ -485,8 +499,8 @@ def main():
         try:
             _ap = json.load(open(_prone_path, encoding="utf-8"))
             _prev_prone = set(_ap.get("signals", []) or [])
-        except Exception:
-            pass
+        except Exception as _e:
+            ssq_log.log_exception("run_cycle", _e, "run_cycle.py:488 silent-except")
     _prune_sigs = _debunked | _prev_prone
     if _prune_sigs:
         print(f"[L3] GA 跨轮 prune: {len(_prune_sigs)} 个已证伪/构造伪结构信号 {sorted(_prune_sigs)}")
@@ -844,8 +858,8 @@ def main():
                         _q = _d.get("best_q")
                         if isinstance(_q, (int, float)) and _q is not None:
                             _hist_q.append(float(_q))
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        ssq_log.log_exception("run_cycle", _e, "run_cycle.py:847 silent-except")
         _win = _hist_q[-int(cfg.get("stability_window", 20)):]
         if len(_win) >= 3:
             _arr = np.array(_win)
@@ -945,7 +959,9 @@ def main():
 
     # 8. 写 state.json
     lb_top = sorted(leaderboard.values(), key=lambda e: e["p_raw"])[:20]
-    history = S.recent_runs(S.open_db(DB), 200)
+    _hist_db = S.open_db(DB)
+    history = S.recent_runs(_hist_db, 200)
+    _hist_db.close()
     state = {
         "updated": run["ts"], "n_issues": N, "last_issue": issues[-1], "added": added,
         "cycle_id": rid, "best_q": best_q, "best_sig": best["sig"], "best_test": best["test"],
@@ -1034,8 +1050,8 @@ def main():
     for old in snaps[:-20]:
         try:
             os.remove(os.path.join(DATA_DIR, old))
-        except OSError:
-            pass
+        except OSError as _e:
+            ssq_log.log_exception("run_cycle", _e, "run_cycle.py:1039 silent-except")
 
     print(f"[cycle] best_q={best_q:.4g}  best={best['sig']}/{best['test']}  "
           f"oos_p={oos_p if oos_p is None else round(oos_p,4)}  alert={alert}")

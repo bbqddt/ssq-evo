@@ -131,6 +131,44 @@ def check_no_ghost_modules():
     return True, r.stdout.strip()
 
 
+def check_code_patterns():
+    """Catch repeatable bad patterns (code-mode audit).
+
+    Covers: flush() outside `with` block (silently downgrades atomic writes),
+    silent `except: pass`, hardcoded drive paths in container-shipped files,
+    bare except, mutable default args.
+    """
+    pa_path = os.path.join(PROJECT_DIR, "pattern_audit.py")
+    if not os.path.isfile(pa_path):
+        return True, "OK: pattern_audit.py not found (skip)"
+    r = subprocess.run([sys.executable, pa_path, "--strict"], cwd=PROJECT_DIR,
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return False, f"Bad code patterns found:\n{r.stdout}"
+    return True, r.stdout.strip().replace("\n", " | ")
+
+
+def check_import_smoke():
+    """Import every container-shipped module — catches import-time crashes."""
+    mods = ("paths ssq_log engine_core data store run_cycle daemon_loop frontier "
+            "make_dashboard nonstationarity evaluator cache diff_formula "
+            "positive_control redteam_audit representation_zoo layered_null "
+            "run_axes firewall proposer scoring formula_viz predict_tonight "
+            "ssq_health learning_contract failure_absorber ingest_candidates "
+            "axis_proposer review_primitives bias_corrector formula_composer "
+            "formula_research watchdog_mode seed_bridge verify_df_gen "
+            "progress_gate blue_evolve changepoint_evolve gru_evolve seq_evolve "
+            "novelty_search reflective_designer").split()
+    r = subprocess.run(
+        [sys.executable, "-c",
+         "import " + ", ".join(mods) + "; print('IMPORT_OK')"],
+        cwd=PROJECT_DIR, capture_output=True, text=True, timeout=180)
+    if r.returncode != 0:
+        short = (r.stderr or r.stdout).strip().split("\n")[-6:]
+        return False, "Import smoke FAILED:\n" + "\n".join(short)
+    return True, f"OK: {len(mods)} modules import clean"
+
+
 def main():
     print("=" * 55)
     print("PRE-COMMIT CHECK - run before git commit")
@@ -149,6 +187,8 @@ def main():
         ("No untracked .py orphans", check_untracked_critical),
         ("File format sanity", check_newline_at_eof),
         ("No ghost module imports", check_no_ghost_modules),
+        ("No bad code patterns", check_code_patterns),
+        ("Import smoke test", check_import_smoke),
     ]
 
     results = []

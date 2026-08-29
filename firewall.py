@@ -24,6 +24,7 @@ import subprocess
 from datetime import datetime, timezone
 
 import numpy as np
+import ssq_log
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _DATA_DIR = os.environ.get("DATA_DIR", HERE)
@@ -40,15 +41,15 @@ def code_version():
                              capture_output=True, text=True, timeout=10)
         if out.returncode == 0 and out.stdout.strip():
             return out.stdout.strip()[:12]
-    except Exception:
-        pass
+    except Exception as _e:
+        ssq_log.log_exception("firewall", _e, "firewall.py:43 silent-except")
     # 容器内无 git → 回退读 Dockerfile 注入的 build_info.txt
     try:
         bf = os.path.join(HERE, "build_info.txt")
         if os.path.isfile(bf):
             return open(bf).read().strip()[:12]
-    except Exception:
-        pass
+    except Exception as _e:
+        ssq_log.log_exception("firewall", _e, "firewall.py:50 silent-except")
     return "unknown"
 
 

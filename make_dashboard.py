@@ -19,9 +19,10 @@ import os
 import html
 import datetime
 import shutil
+import paths
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DATA = os.environ.get("DATA_DIR", r"D:\ssq_evo_data")
+DATA = paths.DATA_DIR
 DIGEST = os.path.join(DATA, "daily_digest.jsonl")
 OUT_DIR = os.path.join(DATA, "dashboard")
 OUT = os.path.join(OUT_DIR, "index.html")

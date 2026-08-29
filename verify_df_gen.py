@@ -17,6 +17,7 @@
 #   3. 不把"df_gen=1"误报为失败或成功，只陈述研发进度。
 # ---------------------------------------------------------------------------
 import json, subprocess, sys
+import ssq_log
 
 # 数据卷默认路径（host 侧；docker 容器内为 /app/data，host 挂载为 /d/ssq_evo_data）
 DATA_DIR = "/d/ssq_evo_data"
@@ -34,8 +35,8 @@ def image_sha():
         for line in reversed(log.splitlines()):
             if "镜像构建 SHA=" in line:
                 return line.split("SHA=")[1].strip()[:8]
-    except Exception:
-        pass
+    except Exception as _e:
+        ssq_log.log_exception("verify_df_gen", _e, "verify_df_gen.py:37 silent-except")
     return "?"
 
 def last_digest():

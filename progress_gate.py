@@ -21,8 +21,9 @@ import os
 import sys
 import numpy as np
 from datetime import datetime
+import paths
 
-DATA_DIR = os.environ.get("DATA_DIR", r"D:\ssq_evo_data")
+DATA_DIR = paths.DATA_DIR
 DIGEST = os.path.join(DATA_DIR, "daily_digest.jsonl")
 FRONTIER = os.path.join(DATA_DIR, "frontier.json")
 DAEMON_LOG = os.path.join(DATA_DIR, "daemon.log")

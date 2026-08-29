@@ -18,9 +18,11 @@
   python predict_tonight.py score    --issue 26094   # 开奖后：先 fetch 再打分
 """
 import os, sys, csv, json, random, math, argparse, datetime
+import paths
+import ssq_log
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.environ.get("DATA_DIR", r"D:/ssq_evo_data")
+DATA_DIR = paths.DATA_DIR
 MASTER = os.path.join(DATA_DIR, "ssq_master.csv")
 PRED_FILE = os.path.join(DATA_DIR, "predictions.jsonl")
 
@@ -412,8 +414,8 @@ def hypergeo_p(reds_pred, reds_actual, blue_pred, blue_actual):
         p_comb = math.exp(-chi2 / 2.0)  # 粗略；精确用 chi2.sf
         try:
             from statistics import NormalDist  # 仅占位，实际用近似
-        except Exception:
-            pass
+        except Exception as _e:
+            ssq_log.log_exception("predict_tonight", _e, "predict_tonight.py:416 silent-except")
         # 用 scipy 若可用，否则近似正态
         try:
             import scipy.stats as _st

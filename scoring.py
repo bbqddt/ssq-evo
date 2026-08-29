@@ -21,6 +21,7 @@ scoring.py —— 正确评分规则(proper scoring rule) + 实盘 live 排行�
 import json
 import math
 import os
+import ssq_log
 
 COMB33_6 = math.comb(33, 6)        # 1,107,568
 LOG_COMB33_6 = math.log(COMB33_6)
@@ -99,8 +100,8 @@ def load_predictions(path):
                 continue
             try:
                 out.append(json.loads(line))
-            except Exception:
-                pass
+            except Exception as _e:
+                ssq_log.log_exception("scoring", _e, "scoring.py:102 silent-except")
     return out
 
 
@@ -190,5 +191,6 @@ def live_leaderboard(data_dir):
 
 if __name__ == "__main__":
     import sys
-    _dd = sys.argv[1] if len(sys.argv) > 1 else r"D:\ssq_evo_data"
+    import paths
+    _dd = sys.argv[1] if len(sys.argv) > 1 else paths.DATA_DIR
     print(json.dumps(live_leaderboard(_dd), ensure_ascii=False, indent=2))

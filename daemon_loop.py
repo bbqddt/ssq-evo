@@ -17,11 +17,13 @@ daemon_loop.py —— 7x24 常驻循环（配合 nssm 注册为 Windows 服务�
 启动：python daemon_loop.py
 """
 import os, sys, time, subprocess, json, errno, atexit, threading
+import ssq_log
+import paths
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-DATA_DIR = os.environ.get("DATA_DIR") or r"D:\ssq_evo_data"
+DATA_DIR = paths.DATA_DIR
 LOCK = os.path.join(DATA_DIR, "daemon.lock")
 DIGEST = os.path.join(DATA_DIR, "daily_digest.jsonl")
 
@@ -49,8 +51,8 @@ def _release_lock():
     try:
         if os.path.exists(LOCK):
             os.remove(LOCK)
-    except OSError:
-        pass
+    except OSError as _e:
+        ssq_log.log_exception("daemon_loop", _e, "daemon_loop.py:52 silent-except")
 
 
 def acquire_lock():
@@ -73,8 +75,8 @@ def acquire_lock():
                 sys.exit(0)
             try:
                 os.remove(LOCK)
-            except OSError:
-                pass
+            except OSError as _e:
+                ssq_log.log_exception("daemon_loop", _e, "daemon_loop.py:76 silent-except")
             continue
         os.write(fd, str(os.getpid()).encode())
         os.close(fd)
@@ -83,8 +85,8 @@ def acquire_lock():
                 if f.read().strip() != str(os.getpid()):
                     print("[daemon] 锁被抢占，退出", flush=True)
                     sys.exit(0)
-        except OSError:
-            pass
+        except OSError as _e:
+            ssq_log.log_exception("daemon_loop", _e, "daemon_loop.py:86 silent-except")
         atexit.register(_release_lock)
         return
 
@@ -101,8 +103,8 @@ def load_cfg():
         sys.path.insert(0, HERE)
         from configs import load_engine_config
         cfg.update(load_engine_config())
-    except Exception:
-        pass
+    except Exception as _e:
+        ssq_log.log_exception("daemon_loop", _e, "daemon_loop.py:104 silent-except")
     # 2) config.json 覆盖（部署键如 http_port / schedule_hours 应留在此）
     for base in (DATA_DIR, HERE):
         try:
@@ -143,8 +145,8 @@ def run_cycle_subprocess(py):
                 for raw_line in iter(proc.stdout.readline, b""):
                     lf.write(raw_line.decode("utf-8", errors="replace"))
                     lf.flush()
-        except Exception:
-            pass
+        except Exception as _e:
+            ssq_log.log_exception("daemon_loop", _e, "daemon_loop.py:146 silent-except")
 
     rt = threading.Thread(target=_reader, daemon=True)
     rt.start()
@@ -155,8 +157,8 @@ def run_cycle_subprocess(py):
         proc.kill()
         try:
             proc.wait(timeout=10)
-        except Exception:
-            pass
+        except Exception as _e:
+            ssq_log.log_exception("daemon_loop", _e, "daemon_loop.py:158 silent-except")
         _log("[daemon] cycle 超时(45min), 已强杀并重启")
         rc = -1
     except Exception as e:
@@ -335,8 +337,8 @@ def main():
         _lf = open(os.path.join(DATA_DIR, "daemon.log"), "a", encoding="utf-8")
         sys.stdout = _lf
         sys.stderr = _lf
-    except Exception:
-        pass
+    except Exception as _e:
+        ssq_log.log_exception("daemon_loop", _e, "daemon_loop.py:338 silent-except")
     acquire_lock()
 
     cfg = load_cfg()

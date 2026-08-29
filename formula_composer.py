@@ -28,6 +28,7 @@ from engine_core import (
 # 使 E.BASE_SIGNALS 字母表含 representation_zoo 代数基元 + 本项目的原创基元，
 # GA 每轮自动可用。幂等，可安全在模块加载时调用。
 import formula_research as FR
+import ssq_log
 FR.register()
 
 # MAX_DEPTH 动态对齐 engine_core._MAX_COMP_DEPTH：改 engine_core 一处即可，composer 自动跟随。
@@ -165,8 +166,8 @@ class FormulaComposer:
             _ext = _SB.load_seeds_consume()
             if _ext:
                 sources = list(_ext) + sources
-        except Exception:
-            pass
+        except Exception as _e:
+            ssq_log.log_exception("formula_composer", _e, "formula_composer.py:168 silent-except")
         if not sources:
             return self.seed_gen1(n=n)
         cur_d = max(_depth_of(c) for c in sources)

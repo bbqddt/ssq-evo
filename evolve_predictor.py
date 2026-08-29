@@ -29,8 +29,11 @@ import numpy as np
 from collections import defaultdict
 import multiprocessing as mp
 
+import ssq_log
+import paths
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.environ.get("DATA_DIR", r"D:/ssq_evo_data")
+DATA_DIR = paths.DATA_DIR
 MASTER = os.path.join(DATA_DIR, "ssq_master.csv")
 FRONTIER = os.path.join(DATA_DIR, "evolve_frontier.json")
 PRED_FILE = os.path.join(DATA_DIR, "predictions.jsonl")
@@ -470,13 +473,34 @@ def _eval_spec_worker(spec):
 
 
 def load_frontier():
-    if os.path.exists(FRONTIER):
-        return json.load(open(FRONTIER, encoding="utf-8"))
-    return {"footprints": [], "gen": 0}
+    """加载 frontier，兼容引擎版 frontier（无 footprints 键）。
+
+    历史事故：引擎的 frontier.json 只有 elites/tried/coverage 等键，
+    本模块直接 fr["footprints"] → KeyError → 分布式 evolve 每轮启动即崩。
+    """
+    if not os.path.exists(FRONTIER):
+        return {"footprints": [], "gen": 0}
+    try:
+        fr = json.load(open(FRONTIER, encoding="utf-8"))
+        if not isinstance(fr, dict):
+            raise ValueError("frontier root is not a dict")
+    except Exception as e:
+        ssq_log.critical("evolve_predictor.load_frontier",
+                         f"frontier.json unreadable/corrupt: {FRONTIER}", e)
+        raise
+    fr.setdefault("footprints", [])
+    fr.setdefault("gen", 0)
+    return fr
 
 
 def save_frontier(fr):
-    json.dump(fr, open(FRONTIER, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    """原子写：CI runner 随时可能被 kill，截断会毁掉整个 frontier。"""
+    tmp = FRONTIER + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(fr, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, FRONTIER)
 
 
 def evolve(generations=20, pop=20, seed=20260823, workers=0, data=None, out=None):
@@ -499,9 +523,20 @@ def evolve(generations=20, pop=20, seed=20260823, workers=0, data=None, out=None
     for g in range(generations):
         # 种群并行评估（多进程，把 8 核用满）
         if workers > 1 and len(pop_specs) > 1:
-            with mp.Pool(processes=workers, initializer=_init_worker, initargs=(draws, train_end)) as pool:
-                zs = pool.map(_eval_spec_worker, pop_specs)
-            scored = sorted(((z, s) for s, z in zip(pop_specs, zs)), key=lambda x: -x[0])
+            try:
+                with mp.Pool(processes=workers, initializer=_init_worker, initargs=(draws, train_end), maxtasksperchild=200) as pool:
+                    zs = pool.map(_eval_spec_worker, pop_specs)
+                scored = sorted(((z, s) for s, z in zip(pop_specs, zs)), key=lambda x: -x[0])
+            except Exception:
+                # Pool 失败（MemoryError/pickle 错误）→ 回退串行
+                scored = []
+                for s in pop_specs:
+                    try:
+                        z = fitness_kfold(s, draws, train_end, k=4)
+                    except Exception:
+                        z = -999
+                    scored.append((z, s))
+                scored.sort(key=lambda x: -x[0])
         else:
             scored = []
             for s in pop_specs:

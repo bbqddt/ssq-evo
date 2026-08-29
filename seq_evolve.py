@@ -17,10 +17,11 @@
 """
 import os, sys, json, math, random, argparse
 import numpy as np
+import paths
 
 RED_N, RED_PICK, BLUE_N = 33, 6, 16
 HERE = os.path.dirname(os.path.abspath(__file__))
-MASTER = os.path.join(HERE, "D:/ssq_evo_data/ssq_master.csv")
+MASTER = paths.master_csv()
 SNAP = os.path.join(HERE, "data/ssq_history.csv")
 
 

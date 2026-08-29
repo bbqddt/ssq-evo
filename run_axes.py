@@ -32,6 +32,7 @@ import evaluator as EV  # noqa: F401  (确认闸门在 diff_formula 内部复用
 import diff_formula as DF
 import representation_zoo as RZ
 import layered_null as LN
+import paths
 
 RZ.register()
 
@@ -182,7 +183,7 @@ def _print_table(recs):
 
 def main():
     import data as D
-    path = "D:/ssq_evo_data/ssq_master.csv"
+    path = paths.master_csv()
     m = D.load_master(path)
     if not m:
         N = 2000
