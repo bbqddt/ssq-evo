@@ -880,8 +880,9 @@ def main():
 
     # 7. 持久化
     con = S.open_db(DB)
-    pc = None  # 持续阳性对照结果占位；8.5 节在 state 写入之后重算（依赖 rid），此处先绑定避免 UnboundLocalError
-    run = {
+    try:
+        pc = None  # 持续阳性对照结果占位；8.5 节在 state 写入之后重算（依赖 rid），此处先绑定避免 UnboundLocalError
+        run = {
         "ts": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "n_issues": N, "added": added, "n_eval": len(all_evals),
         "best_q": best_q, "best_sig": best["sig"], "best_test": best["test"],
@@ -934,9 +935,10 @@ def main():
         "pick_blue_pick": (pick["blue_pick"] if pick else None),
         "note": ("候选结构! 需人工复核" if alert else "研发进行中：尚未产出通过最终闸门的公式（公式代数持续演进，待未来开奖前瞻验证）"),
     }
-    rid = S.insert_run(con, run)
-    S.insert_evals(con, rid, all_evals)
-    con.close()
+        rid = S.insert_run(con, run)
+        S.insert_evals(con, rid, all_evals)
+    finally:
+        con.close()
 
     # 8.5 持续阳性对照（闸门功率监控）：每 positive_control_every 轮注入已知结构，
     # 验证统一诚信闸门仍灵敏；若判不出 SIGNAL 说明闸门功率退化，redteam_audit 会 ALERT。
