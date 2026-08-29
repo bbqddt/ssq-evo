@@ -53,14 +53,15 @@ def main():
         spec = p.get("spec")
         if not spec:
             continue
+        meta = p.get("meta") or {}
         # 在快照上做 surrogate 初筛（防构造伪显著），再交驾1 严格闸门
         try:
             sur_z = EP.random_surrogate_z(spec)
         except Exception:
             sur_z = 999
         rec = {
-            "seed": p["meta"]["seed"],
-            "kfold_z": p["meta"]["kfold_z"],
+            "seed": meta.get("seed"),
+            "kfold_z": meta.get("kfold_z"),
             "surrogate_z": sur_z,
             "spec": spec,
             "source": "distributed-evolve",

@@ -1915,6 +1915,11 @@ class Evolution:
                         return 1.0 - p
                     _trad_fits = [_trad_fit_only(e) for e in evals] if evals else []
                     _alpha = NS.adaptive_alpha(_trad_fits, base_alpha=0.5, floor=0.15)
+                    # 诚实日志：让 watchdog L3 / 人类能确认第三驾车(多样性维持)真的在跑
+                    _n_added = sum(1 for v in _novelty_cache.values() if v is not None)
+                    print("[novelty] epoch=%s archive=%d added=%d alpha=%.3f"
+                          % (getattr(self, "epoch_i", "?"),
+                             len(self.novelty_archive._fps), _n_added, _alpha))
 
                     def _fitness(e):
                         trad = _trad_fit_only(e)

@@ -13,13 +13,10 @@ PROJECT_DIR = r"D:\ssq_evo"
 # 宿主/CI 专用脚本：本就不进容器，不应被「Dockerfile 必须 COPY 所有 .py」门禁拦截。
 # 这些脚本运行在 GitHub Actions runner 或宿主机，不属 Docker 镜像的一部分。
 HOST_ONLY_PY = {
-    "ci_evolve.py",          # 驾3 分布式 GA（CI runner 跑，吃静态快照）
-    "merge_candidates.py",   # workflow collect 合并 artifact
-    "ingest_candidates.py",  # 驾1 摄入候选（宿主机跑）
-    "data_refresh.py",       # 生成本地静态快照（宿主机跑）
-    "meta_audit.py",         # 只读元审计（宿主机跑，docker exec 读容器内状态，不进容器）
+    # 以下脚本只在宿主机/CI 跑，不进 Docker 引擎镜像——从 Dockerfile COPY 检查中豁免
     "evolve_predictor.py",   # 公式演进实验脚本（本机8核/CI runner 跑，不属 Docker 引擎镜像）
     "merge_evo_proposals.py",# 分布式 evolve 的 artifact 合并（workflow 跑，不进容器）
+    "meta_audit.py",         # 只读元审计（宿主机跑，docker exec 读容器内状态，不进容器）
 }
 
 
