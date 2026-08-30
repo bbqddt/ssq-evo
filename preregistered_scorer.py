@@ -200,6 +200,57 @@ def _append_log(res):
         f.write(json.dumps(res, ensure_ascii=False) + "\n")
 
 
+def prospective_power_curve(n_list=(50, 200, 500, 1000, 2000, 3500, 7000),
+                            sigma_pct=3.5, m=200, mc=200, seed=31337):
+    """前瞻证据累积曲线：新开奖累积到 n 期时，打分器能多可靠地判决？
+
+    构造：把注册向量 v 的**方向**当作偏倚方向、幅度重标定到 σ，
+    生成"未来"数据，用**打分器自身的判据**（相关 r 的蒙特卡洛秩 p）评分。
+    ⇒ 得到的检出率是"在该 σ 真实存在的前提下，累积 n 期后能确认的概率"。
+
+    注意：这里没有用 v 当真值，而是把 v 去均值后重标定到 σ，
+    避免把 v 自带的估计噪声当成信号而高估功效。
+    """
+    reg, err = load_registry()
+    if reg is None:
+        print("[scorer] %s" % err)
+        return None
+    v = np.array([reg["dev_pct"][str(i + 1)] for i in range(33)], float)
+    v = v - v.mean()
+    if v.std() > 0:
+        v = v / v.std() * sigma_pct
+    w = np.exp(v / 100.0)
+    p_bias = w / w.sum()
+
+    e_per = 6.0 / 33.0
+    rng = np.random.default_rng(seed)
+    out = []
+    for n_new in n_list:
+        # 零分布：同期数均匀随机 vs v 的相关
+        null = []
+        for _ in range(mc):
+            u = np.zeros(33)
+            for _d in range(n_new):
+                for b in np.sort(rng.choice(33, 6, replace=False)):
+                    u[b] += 1
+            u = (u - n_new * e_per) / (n_new * e_per) * 100.0
+            null.append(float(np.corrcoef(v, u)[0, 1]))
+        null = np.array(null)
+        thr = float(np.quantile(null, 0.95))
+        hits = 0
+        for _ in range(m):
+            u = np.zeros(33)
+            for _d in range(n_new):
+                for b in rng.choice(33, 6, replace=False, p=p_bias):
+                    u[b] += 1
+            u = (u - n_new * e_per) / (n_new * e_per) * 100.0
+            if float(np.corrcoef(v, u)[0, 1]) >= thr:
+                hits += 1
+        out.append({"n_new": n_new, "detect_rate": hits / m,
+                    "null_r_sd": round(float(null.std()), 4)})
+    return {"sigma_pct": sigma_pct, "m": m, "mc": mc, "curve": out}
+
+
 def status():
     reg, err = load_registry()
     if reg is None:
