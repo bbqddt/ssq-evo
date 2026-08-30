@@ -50,9 +50,16 @@ CARD = {
         "joint_p_monte_carlo": 0.0167,
         "joint_p_bonferroni_x3": 0.050,
         "bh_fdr_q_of_chi2": 0.0189,
-        "researcher_dof_uncorrected": True,
-        "note": "联合 p 未校正'从众多变体中挑出这 3 个统计量'的研究者自由度，"
-                "真实证据强度 ≤ 0.0167",
+        "researcher_dof": {
+            "df_families": 13,
+            "best_raw_p": 0.0087,
+            "best_family": "K段持续性相关",
+            "bonferroni_corrected_p": 0.1131,
+            "instrument": "analysis_ledger.py（只追加账本, 漏记比多记更糟）",
+            "note": "df=13 Bonferroni 校正后 p=0.1131 ≥0.05 ⇒ 不再显著；"
+                    "真实校正后 p 落在 [0.0087, 0.1131]（检验间相关越强越靠近下界）",
+        },
+        "preferred_explanation": "统计波动/多重比较（df 校正后定量坐实：13 族校正后不再显著）",
         "preferred_explanation": "统计波动/多重比较（四机制测试全阴后升至首选）",
         "fertility_note": "不存在'没有第三种可能'——随机波动即第三种",
     },
