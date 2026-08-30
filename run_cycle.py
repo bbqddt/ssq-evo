@@ -1118,6 +1118,14 @@ def main():
         ]
         _digest_entry = _clean_digest(dict(run))
         _digest_entry["verdict"] = best.get("verdict", "?")
+        # 判决卡：全局科学结论的单一事实来源(verdict_card.py, 改那里即全站同步)。
+        # 诚实红线: ARTIFACT_SUSPECTED 是证据强度评估, 不是域定性;
+        # "疑似伪影"≠"已证伪"; NULL 只能表述为"当前数据+闸门+假设类 未检出"。
+        try:
+            import verdict_card as _VC
+            _digest_entry["verdict_card"] = _VC.load()
+        except Exception as _ve:
+            _digest_entry["verdict_card"] = {"error": str(_ve)}
         _digest_entry["leaderboard"] = _lb_compact
         _digest_entry["positive_control"] = pc   # 真实阳性对照结果(run 内为 None 占位)
         # run 字典未装因果耦合/非平稳/零假设交叉主键/cycle_id(这些在 state 字典独立成门计算),
