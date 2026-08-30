@@ -28,7 +28,6 @@ HOST_ONLY_PY = {
     "physical_bias_model.py",       # 物理约束偏倚模型 + 红蓝联合功效
     "gate_certify.py",              # 闸门认证器(四件套强制前置)
     "preregistered_scorer.py",      # 预注册前瞻打分器
-    "analysis_ledger.py",           # 分析账本(研究者自由度 df 计数)
     "physical_bias_model.py",       # 物理约束偏倚模型 + 红蓝联合功效
     "gate_certify.py",               # 闸门认证器(四件套强制前置, 无证书不得出口)
     "preregistered_scorer.py",       # 预注册前瞻打分器(ARTIFACT_SUSPECTED 零成本推进路径)
