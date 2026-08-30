@@ -49,7 +49,57 @@ def load_registry():
     return json.load(open(p, encoding="utf-8")), None
 
 
+# ---------------------------------------------------------------------------
+# 哈希锚定（F 项）：预注册文件防事后篡改
+# ---------------------------------------------------------------------------
+ANCHOR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "anchors", "preregistered.sha256")
+
+
+def _sha256_of(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b''):
+            h.update(b)
+    return h.hexdigest()
+
+
+def anchor():
+    """把预注册文件的 sha256 写入 git 仓库内锚点（随仓库提交 = 时间戳+内容铁证）。"""
+    reg_path = paths.p(*REG_PATH)
+    if not os.path.exists(reg_path):
+        print("[anchor] 预注册文件不存在")
+        return None
+    h = _sha256_of(reg_path)
+    os.makedirs(os.path.dirname(ANCHOR_PATH), exist_ok=True)
+    with open(ANCHOR_PATH, "w", encoding="utf-8") as f:
+        f.write("%s\n# anchored_at %s\n# 预注册内容此后不得修改; 重注册须另行说明理由\n"
+                % (h, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    print("[anchor] 已锚定: %s" % ANCHOR_PATH)
+    print("[anchor] sha256 = %s" % h[:32] + "...")
+    return h
+
+
+def verify_anchor():
+    """校验当前预注册文件与 git 锚点是否一致。无锚点 ⇒ (False, '未锚定')。"""
+    reg_path = paths.p(*REG_PATH)
+    if not os.path.exists(ANCHOR_PATH):
+        return False, "未锚定"
+    if not os.path.exists(reg_path):
+        return False, "预注册文件不存在"
+    anchored = open(ANCHOR_PATH, encoding="utf-8").readline().strip()
+    current = _sha256_of(reg_path)
+    return (current == anchored), ("一致" if current == anchored else
+                                   "不一致! 预注册内容在锚定后被修改")
+
+
 def score(min_new=MIN_NEW, mc=MC, seed=20260830, verbose=True):
+    ok, msg = verify_anchor()
+    if not ok:
+        print("[scorer] ⛔ 拒绝打分: 预注册完整性校验失败(%s)。" % msg)
+        print("[scorer]    预注册被改动 = 注册失效, 任何'确认'都不可信。")
+        return {"status": "REGISTRY_TAMPERED", "reason": msg}
     reg, err = load_registry()
     if reg is None:
         print("[scorer] %s" % err)

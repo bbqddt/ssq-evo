@@ -25,6 +25,7 @@ HOST_ONLY_PY = {
     "marginal_bias_probe.py",       # 静态边际偏倚探针（重排类零假设对其失明的大区）
     "exchangeable_probe.py",        # 球级可交换(PY/Dirichlet)探针 + 精确自证伪协议
     "exchangeability_order_probe.py", # 交换性置换检验 + 换球时代阳性对照
+    "migrate_domain.py",             # 迁移套件(§10可执行化, 新域许可证生成)
     "physical_bias_model.py",       # 物理约束偏倚模型 + 红蓝联合功效
     "gate_certify.py",              # 闸门认证器(四件套强制前置)
     "preregistered_scorer.py",      # 预注册前瞻打分器
