@@ -24,6 +24,8 @@ HOST_ONLY_PY = {
     "gate_control_ev_a.py",         # EV_A 变换通带内阳性对照（宿主审计）
     "marginal_bias_probe.py",       # 静态边际偏倚探针（重排类零假设对其失明的大区）
     "exchangeable_probe.py",        # 球级可交换(PY/Dirichlet)探针 + 精确自证伪协议
+    "exchangeability_order_probe.py", # 交换性置换检验 + 换球时代阳性对照
+    "physical_bias_model.py",       # 物理约束偏倚模型 + 红蓝联合功效
 }
 
 
