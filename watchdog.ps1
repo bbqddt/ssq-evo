@@ -16,6 +16,9 @@
 # v1: 初始版（只有 L1 基础存活，无调度器注册）
 # v2 (2026-08-29): 修 BUG1无调度器/BUG2 up-d空操作/BUG3静默失败
 # v3 (2026-08-29): 加 L2代码新鲜度/L3三驾车审计/L4环境完整（用户发现旧镜像跑着但watchdog报pass）
+# v4 (2026-08-31): ENGINE_RETIRED flag 模式——引擎已正式退役(见 audit/ENGINE_RETIREMENT_20260831.md)。
+#                   flag 存在期间：不拉 Docker、不审计容器，只守护开奖收尾管线(数据入库+预注册打分)。
+#                   删除 flag 即恢复 v3 全量体检+自动重启(复活程序见决策记录 §5)。
 
 $ErrorActionPreference = "Stop"
 $CI = [System.Globalization.CultureInfo]::InvariantCulture
@@ -68,6 +71,68 @@ function Get-FailCount {
 function Set-FailCount($n) { Set-Content -Path $FailCountFile -Value $n -Encoding UTF8 }
 
 # ============================================================
+# v4: ENGINE_RETIRED mode — draw-closeout watchdog
+# ============================================================
+$RetireFlag = Join-Path $DataDir "ENGINE_RETIRED"
+if (Test-Path $RetireFlag) {
+    $retiredSince = (Get-Item $RetireFlag).LastWriteTime.ToString("yyyy-MM-dd HH:mm")
+    Log "---"
+    Log "MODE: ENGINE_RETIRED (since $retiredSince) - closeout-watchdog only, Docker revival disabled"
+
+    $Master = Join-Path $DataDir "ssq_master.csv"
+    $masterRows = 0
+    if (Test-Path $Master) { $masterRows = ((Get-Content $Master -Encoding UTF8 | Measure-Object -Line).Lines - 1) }
+
+    $today = (Get-Date).ToString("yyyy-MM-dd")
+    $dow = (Get-Date).DayOfWeek
+    $isDrawDay = ($dow -eq "Tuesday" -or $dow -eq "Thursday" -or $dow -eq "Sunday")
+
+    # --- C1: draw-day closeout check (after 23:00 master CSV must carry today's merge) ---
+    if ($isDrawDay -and ((Get-Date).Hour -ge 23)) {
+        $mt = (Get-Item $Master).LastWriteTime
+        if ($mt.Date -eq (Get-Date).Date) {
+            Log "OK  master CSV merged today (rows=$masterRows) - draw ingested"
+        } else {
+            $m = "master CSV NOT updated on draw day after 23:00 (rows=$masterRows) - predict_cron score task (22:30) may have failed"
+            Log "CRIT  $m"; Alert $m "CRITICAL"
+        }
+        # predict_cron.log must show DONE phase=score for today
+        $scoredToday = $false
+        if (Test-Path "$DataDir\predict_cron.log") {
+            $recent = Get-Content "$DataDir\predict_cron.log" -Tail 60 -Encoding UTF8
+            $scoredToday = (($recent | Select-String -SimpleMatch $today | Select-String -SimpleMatch "DONE phase=score").Count -gt 0)
+        }
+        if ($scoredToday) { Log "OK  predict_cron score DONE today" }
+        else {
+            $m2 = "predict_cron.log has no 'DONE phase=score' for $today - scoring task failed or not yet run"
+            Log "CRIT  $m2"; Alert $m2 "CRITICAL"
+        }
+    }
+
+    # --- C2: Sunday evening - preregistered scorer status + anchor integrity (dedup via tracker) ---
+    $WkTracker = Join-Path $DataDir "watchdog_prereg_last.txt"
+    if ($dow -eq "Sunday" -and ((Get-Date).Hour -ge 20)) {
+        $lastWk = ""
+        if (Test-Path $WkTracker) { $lastWk = (Get-Content $WkTracker -Encoding UTF8 | Select-Object -First 1) }
+        if ($lastWk -ne $today) {
+            $py = "C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
+            try {
+                $out = & $py "D:\ssq_evo\preregistered_scorer.py" --status 2>&1
+                foreach ($l in $out) { Log "  prereg: $l" }
+                $out2 = & $py -c "import sys; sys.path.insert(0,'D:/ssq_evo'); import preregistered_scorer as PS; ok,msg = PS.verify_anchor(); print('[anchor]', 'OK' if ok else 'FAIL', msg)" 2>&1
+                foreach ($l in $out2) { Log "  $l" }
+                Set-Content -Path $WkTracker -Value $today -Encoding UTF8
+            } catch { Log "prereg status failed: $($_.Exception.Message)" }
+        }
+    }
+
+    if (-not $isDrawDay) {
+        Log "OK  heartbeat: engine retired, master rows=$masterRows, next duty: draw-day closeout (Tue/Thu/Sun)"
+    }
+    exit 0
+}
+
+# ============================================================
 # Collect all findings before deciding action
 # ============================================================
 $criticals = @()   # → auto restart
@@ -112,7 +177,7 @@ if (Test-Path $StateFile) {
         $st = Get-Content $StateFile -Encoding UTF8 | ConvertFrom-Json
         if ($st.updated) {
             $upd = [datetime]::ParseExact($st.updated, "yyyy-MM-dd HH:mm:ss", $CI)
-            $ageH = (Get-Date - $upd).TotalHours
+            $ageH = ((Get-Date) - $upd).TotalHours
             $currentCycle = $st.cycle_id
             if ($ageH -gt 48) { $warnings += ("state old {0:N0}h (>48)" -f $ageH) }
             else { $info += ("state cycle={0} updated {1:N1}h ago" -f $currentCycle, $ageH) }
