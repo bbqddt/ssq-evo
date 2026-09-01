@@ -1,33 +1,34 @@
-"""预注册前瞻打分器（宿主专用）—— ARTIFACT_SUSPECTED 的唯一零成本推进路径。
+"""预注册前瞻打分器 v2（宿主专用）—— ARTIFACT_SUSPECTED 的唯一零成本推进路径。
 
 背景
 ----
 2026-08-29 夜注册了一个可证伪的前瞻预测（audit/marginal_bias_preregistered.json）：
-33 个红球的边际频率偏差向量。判决依据是**未来开奖**：
-若未来窗口的偏差向量与注册向量显著正相关（秩 p<0.05），
-则静态偏倚假设得到样本外确认；若长期不显著，则进一步支持伪影判定。
+33 个红球的边际频率偏差向量。判决依据是**未来开奖**。
 
-为什么自动化
-------------
-等开奖确认需 7~22 年，人的时间尺度上只能**让机器持续记账**。
-每积累一期自动打一次分，证据随开奖免费累积，无需任何人工干预。
-
-多重警示（诚实要求）
---------------------
-多次窥视（peeking）会累积假阳性风险。本打分器如实记录**已窥视次数**，
-并给出 Bonferroni 后的累计阈值 —— 窥视 k 次后单次显著阈值应为 0.05/k。
-结论只认累计校正后的显著性。
+v2（2026-09-01，PRE_REGISTERED_PROTOCOL_v1 生效）
+------------------------------------------------
+判据从「每窥必记 + Bonferroni 0.05/k」升级为**单统计量 + Lan-DeMets OBF 序贯**：
+  统计量  Z_n = Σ_d (w·X_d) / (SD1·√n)，w = 注册方向单位化，SD1²=162/1056
+  设计    单侧 α=0.05，n_max=3500，边界表 audit/obf_boundary.csv（git 锚定）
+  判决    Z_n ≥ b(n) ⇒ CONFIRMED；n=3500 未跨界 ⇒ NOT_CONFIRMED_AT_DESIGN
+理由：边际 χ² 类方向检验是该候选（静态物理偏倚）的 Neyman-Pearson 最有力检验；
+Z_n 在 H0 下精确布朗 ⇒ OBF 花费精确成立；df 由 13 降为 1（前瞻段）。
+历史段报告仍保持 df=13（analysis_ledger），两段不合并、不 Fisher。
+协议全文：仓库根 PRE_REGISTERED_PROTOCOL_v1.md
 
 用法
 ----
-    python preregistered_scorer.py            # 打分并追加日志
+    python preregistered_scorer.py            # OBF 序贯打分（v2，cron 默认）
     python preregistered_scorer.py --status   # 只看状态不打分
+    python preregistered_scorer.py --legacy   # 旧 Bonferroni 窥视打分（仅历史复算用）
 """
 
 import json
+import math
 import os
 import sys
 from datetime import datetime
+from statistics import NormalDist
 
 import numpy as np
 
@@ -36,10 +37,17 @@ import honesty_footer as HF
 import paths
 from exchangeable_probe import N_BALL, N_PICK, gen_uniform
 
+ALPHA = 0.05          # 序贯设计总 α（单侧）
+_ND = NormalDist()    # stdlib 正态（免 scipy 依赖：hook/最小环境也能跑）
+
 REG_PATH = ("audit", "marginal_bias_preregistered.json")
 LOG_PATH = ("audit", "preregistered_scores.jsonl")
+BOUND_PATH = ("audit", "obf_boundary.csv")
 MIN_NEW = 50          # 低于此数不打分（噪声太大，无信息）
-MC = 400              # 蒙特卡洛零假设重复数
+MC = 400              # 蒙特卡洛零假设重复数（legacy 用）
+N_BALL_SD = 33
+N_PICK_SD = 6
+N_MAX = 3500          # 序贯设计终点（见 PRE_REGISTERED_PROTOCOL_v1.md）
 
 
 def load_registry():
@@ -66,35 +74,148 @@ def _sha256_of(path):
 
 
 def anchor():
-    """把预注册文件的 sha256 写入 git 仓库内锚点（随仓库提交 = 时间戳+内容铁证）。"""
+    """把预注册文件/协议/边界表的 sha256 写入 git 仓库内锚点（随仓库提交 = 时间戳+内容铁证）。"""
     reg_path = paths.p(*REG_PATH)
     if not os.path.exists(reg_path):
         print("[anchor] 预注册文件不存在")
         return None
-    h = _sha256_of(reg_path)
+    entries = [("registry", reg_path)]
+    proto = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "PRE_REGISTERED_PROTOCOL_v1.md")
+    bnd = paths.p(*BOUND_PATH)
+    for name, p in (("protocol", proto), ("boundary", bnd)):
+        if os.path.exists(p):
+            entries.append((name, p))
     os.makedirs(os.path.dirname(ANCHOR_PATH), exist_ok=True)
+    lines = ["%s" % _sha256_of(entries[0][1]),
+             "# anchored_at %s" % datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+             "# 预注册内容此后不得修改; 重注册须另行说明理由"]
+    for name, p in entries[1:]:
+        lines.append("# %s %s %s" % (name, _sha256_of(p), os.path.basename(p)))
     with open(ANCHOR_PATH, "w", encoding="utf-8") as f:
-        f.write("%s\n# anchored_at %s\n# 预注册内容此后不得修改; 重注册须另行说明理由\n"
-                % (h, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        f.write("\n".join(lines) + "\n")
     print("[anchor] 已锚定: %s" % ANCHOR_PATH)
-    print("[anchor] sha256 = %s" % h[:32] + "...")
-    return h
+    for name, p in entries:
+        print("[anchor]   %-8s %s" % (name, _sha256_of(p)[:32] + "..."))
+    return _sha256_of(entries[0][1])
 
 
 def verify_anchor():
-    """校验当前预注册文件与 git 锚点是否一致。无锚点 ⇒ (False, '未锚定')。"""
+    """校验注册向量/协议/边界表与 git 锚点是否一致。无锚点 ⇒ (False, '未锚定')。"""
     reg_path = paths.p(*REG_PATH)
     if not os.path.exists(ANCHOR_PATH):
         return False, "未锚定"
     if not os.path.exists(reg_path):
         return False, "预注册文件不存在"
-    anchored = open(ANCHOR_PATH, encoding="utf-8").readline().strip()
+    lines = [l.strip() for l in open(ANCHOR_PATH, encoding="utf-8") if l.strip()]
+    anchored = lines[0]
     current = _sha256_of(reg_path)
-    return (current == anchored), ("一致" if current == anchored else
-                                   "不一致! 预注册内容在锚定后被修改")
+    if current != anchored:
+        return False, "不一致! 注册向量在锚定后被修改"
+    for l in lines:
+        if l.startswith("# ") and len(l.split()) >= 3 and l.split()[1].count(".") == 0 \
+                and len(l.split()[1]) == 64:
+            parts = l.split()
+            name, h = parts[1], parts[2]
+            p = (os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "PRE_REGISTERED_PROTOCOL_v1.md") if name == "protocol"
+                 else paths.p(*BOUND_PATH))
+            if not os.path.exists(p):
+                return False, "锚定文件缺失: %s" % name
+            if _sha256_of(p) != h:
+                return False, "不一致! %s 在锚定后被修改" % name
+    return True, "一致(registry+protocol+boundary)"
 
 
-def score(min_new=MIN_NEW, mc=MC, seed=20260830, verbose=True):
+def score(min_new=MIN_NEW, verbose=True):
+    """v2 序贯打分：方向性线性得分 Z_n + OBF 边界查表（PRE_REGISTERED_PROTOCOL_v1）。"""
+    ok, msg = verify_anchor()
+    if not ok:
+        print("[scorer] ⛔ 拒绝打分: 完整性校验失败(%s)。" % msg)
+        return {"status": "REGISTRY_TAMPERED", "reason": msg}
+    reg, err = load_registry()
+    if reg is None:
+        print("[scorer] %s" % err)
+        return None
+    v = np.array([reg["dev_pct"][str(i + 1)] for i in range(N_BALL)], float)
+    w = v - v.mean()
+    w = w / np.linalg.norm(w)                      # 单位化注册方向
+    sd1 = math.sqrt(N_PICK_SD * (N_BALL_SD - N_PICK_SD) / (N_BALL_SD * (N_BALL_SD - 1)))
+
+    # 边界表
+    bnd_path = paths.p(*BOUND_PATH)
+    if not os.path.exists(bnd_path):
+        print("[scorer] ⛔ 边界表缺失: %s (先跑 obf_design.py)" % bnd_path)
+        return {"status": "BOUNDARY_MISSING"}
+    raw = np.loadtxt(bnd_path, delimiter=",", skiprows=1)
+    b_z = dict(zip(raw[:, 0].astype(int), raw[:, 1]))
+
+    master = D.load_master(paths.master_csv())
+    reds, blues, _ = D.to_arrays(master)
+    n_basis = reg.get("n_basis", 0)
+    n = len(reds)
+    n_new = n - n_basis
+    if n_new <= 0:
+        if verbose:
+            print("[scorer] 注册基准 n=%d, 当前 n=%d —— 尚无新开奖可打分" % (n_basis, n))
+        return {"status": "NO_NEW_DRAWS", "n_basis": n_basis, "n_now": n}
+
+    new_reds = reds[n_basis:]
+    if verbose:
+        print("[scorer] 注册基准 n=%d, 新开奖 %d 期" % (n_basis, n_new))
+
+    res = {
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "design": "OBF_v1", "n_basis": n_basis, "n_new": n_new,
+        "footer": HF.HONESTY_FOOTER,
+    }
+    if n_new < min_new:
+        if verbose:
+            print("[scorer] 新开奖 %d < %d，样本不足暂不打分（设计边界此时为天文级，无信息）"
+                  % (n_new, min_new))
+        res.update({"status": "INSUFFICIENT", "min_new": min_new})
+        _append_log(res)
+        return res
+
+    # Z_n = Σ w·X_d / (SD1·√n)；Σ_d Σ_{b∈d} w_b = w·counts（每期恰 6 个不同球）
+    counts = np.bincount(new_reds.ravel(), minlength=N_BALL)[1:N_BALL + 1].astype(float)
+    L = float(w @ counts)                      # Σ_d Σ_{b∈d} w_b = w·counts
+    Z = L / (sd1 * math.sqrt(n_new))
+
+    if n_new <= N_MAX:
+        b = float(b_z.get(n_new, float("inf")))
+    else:
+        b = None                               # 设计已终点
+    crossed = (b is not None) and (Z >= b)
+    spent = None
+    if n_new <= N_MAX:
+        t = n_new / N_MAX
+        spent = 1.0 - _ND.cdf(_ND.inv_cdf(1 - ALPHA) / math.sqrt(t)) if t > 0 else 0.0
+
+    res.update({
+        "Z": round(Z, 4),
+        "boundary": (round(b, 4) if b is not None else "DESIGN_ENDED"),
+        "alpha_spent_cum": (round(spent, 6) if spent is not None else 1.0),
+        "verdict": ("CONFIRMED_OBF" if crossed else
+                    ("NOT_CONFIRMED_AT_DESIGN" if (b is None or n_new >= N_MAX)
+                     else "MONITORING")),
+    })
+    if verbose:
+        print("[scorer] Z_%d = %+.4f   边界 b(%d) = %s   已花 α*(t) = %s"
+              % (n_new, Z, n_new,
+                 ("%.4f" % b) if b is not None else "设计终点",
+                 ("%.6f" % spent) if spent is not None else "-"))
+        print("[scorer] 判定: %s" % res["verdict"])
+        if crossed:
+            print("[scorer] ★ 序贯边界穿越 ⇒ 注册方向静态偏倚获前瞻确认")
+        elif n_new >= N_MAX:
+            print("[scorer] 终点未穿越 ⇒ σ≈%.1f%% 方向候选在本设计(功效99.8%%)下未获确认 ⇒ 候选降级" % 3.5)
+        print("[scorer] [页脚] %s" % HF.HONESTY_FOOTER)
+    _append_log(res)
+    return res
+
+
+def score_legacy(min_new=MIN_NEW, mc=MC, seed=20260830, verbose=True):
     ok, msg = verify_anchor()
     if not ok:
         print("[scorer] ⛔ 拒绝打分: 预注册完整性校验失败(%s)。" % msg)
@@ -256,24 +377,42 @@ def status():
     if reg is None:
         print("[scorer] %s" % err)
         return
+    ok, msg = verify_anchor()
+    print("[scorer] 锚点完整性: %s (%s)" % ("OK" if ok else "FAIL", msg))
     master = D.load_master(paths.master_csv())
     reds, _, _ = D.to_arrays(master)
     n_new = len(reds) - reg.get("n_basis", 0)
-    peeks = _peek_count()
-    print("[scorer] 注册于 %s (基准 n=%d)" % (reg.get("registered_at"), reg.get("n_basis")))
-    print("[scorer] 当前新开奖 %d 期；已正式打分 %d 次（打分门槛 n_new>=%d）"
-          % (n_new, peeks, MIN_NEW))
+    print("[scorer] 注册于 %s (基准 n=%d)；当前新开奖 %d 期 / 设计终点 %d"
+          % (reg.get("registered_at"), reg.get("n_basis"), n_new, N_MAX))
+    bnd = paths.p(*BOUND_PATH)
+    if os.path.exists(bnd) and n_new >= MIN_NEW:
+        raw = np.loadtxt(bnd, delimiter=",", skiprows=1)
+        bz = dict(zip(raw[:, 0].astype(int), raw[:, 1]))
+        v = np.array([reg["dev_pct"][str(i + 1)] for i in range(N_BALL)], float)
+        w = v - v.mean(); w /= np.linalg.norm(w)
+        counts = np.bincount(reds[reg.get("n_basis", 0):].ravel(),
+                             minlength=N_BALL)[1:N_BALL + 1].astype(float)
+        sd1 = math.sqrt(N_PICK_SD * (N_BALL_SD - N_PICK_SD) / (N_BALL_SD * (N_BALL_SD - 1)))
+        Z = float(w @ counts) / (sd1 * math.sqrt(n_new))
+        print("[scorer] 当前 Z_%d = %+.4f  vs 边界 %.4f  ⇒ %s"
+              % (n_new, Z, bz.get(n_new, float("inf")),
+                 "已穿越" if Z >= bz.get(n_new, float("inf")) else "未穿越"))
     p = paths.p(*LOG_PATH)
     if os.path.exists(p):
         lines = [l for l in open(p, encoding="utf-8").read().splitlines() if l.strip()]
         if lines:
             last = json.loads(lines[-1])
-            print("[scorer] 最近一次: %s  r=%+.4f p=%.4f 判定=%s"
-                  % (last["ts"], last["r"], last["p_r"], last["verdict"]))
+            print("[scorer] 最近一次: %s  design=%s  Z=%s  判定=%s"
+                  % (last["ts"], last.get("design", "legacy"),
+                     last.get("Z", "-"), last["verdict"]))
 
 
 if __name__ == "__main__":
     if "--status" in sys.argv:
         status()
+    elif "--legacy" in sys.argv:
+        score_legacy()
+    elif "--anchor" in sys.argv:
+        anchor()
     else:
         score()

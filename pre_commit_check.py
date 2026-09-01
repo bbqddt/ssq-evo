@@ -33,6 +33,7 @@ HOST_ONLY_PY = {
     "physical_bias_model.py",       # 物理约束偏倚模型 + 红蓝联合功效
     "gate_certify.py",               # 闸门认证器(四件套强制前置, 无证书不得出口)
     "preregistered_scorer.py",       # 预注册前瞻打分器(ARTIFACT_SUSPECTED 零成本推进路径)
+    "obf_design.py",                 # OBF 序贯设计器(边界递推+双对照, 宿主 venv 跑)
 }
 
 
@@ -161,6 +162,16 @@ def check_code_patterns():
     return True, r.stdout.strip().replace("\n", " | ")
 
 
+def _smoke_python():
+    """import smoke 需要带 numpy 等重依赖的解释器。
+    优先 cron 用的托管 venv（与生产一致）；托管 python 自 2026-09 起不带 numpy，
+    用它跑 smoke 会假 FAIL（hook 曾因此静默变砖）。"""
+    venv_py = r"C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
+    if os.path.exists(venv_py):
+        return venv_py
+    return sys.executable
+
+
 def check_import_smoke():
     """Import every container-shipped module — catches import-time crashes."""
     mods = ("paths ssq_log engine_core data store run_cycle daemon_loop frontier "
@@ -173,7 +184,7 @@ def check_import_smoke():
             "progress_gate blue_evolve changepoint_evolve gru_evolve seq_evolve "
             "novelty_search reflective_designer").split()
     r = subprocess.run(
-        [sys.executable, "-c",
+        [_smoke_python(), "-c",
          "import " + ", ".join(mods) + "; print('IMPORT_OK')"],
         cwd=PROJECT_DIR, capture_output=True, text=True, timeout=180)
     if r.returncode != 0:
