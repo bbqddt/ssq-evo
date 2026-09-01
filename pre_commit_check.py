@@ -34,6 +34,7 @@ HOST_ONLY_PY = {
     "gate_certify.py",               # 闸门认证器(四件套强制前置, 无证书不得出口)
     "preregistered_scorer.py",       # 预注册前瞻打分器(ARTIFACT_SUSPECTED 零成本推进路径)
     "obf_design.py",                 # OBF 序贯设计器(边界递推+双对照, 宿主 venv 跑)
+    "physical_prior_bayes.py",       # 制造公差贝叶斯先验 MC(次级证据, 宿主跑写 audit/)
 }
 
 
