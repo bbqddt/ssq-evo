@@ -404,7 +404,7 @@ def status():
             last = json.loads(lines[-1])
             print("[scorer] 最近一次: %s  design=%s  Z=%s  判定=%s"
                   % (last["ts"], last.get("design", "legacy"),
-                     last.get("Z", "-"), last["verdict"]))
+                     last.get("Z", "-"), last.get("verdict", last.get("status", "-"))))
 
 
 if __name__ == "__main__":
