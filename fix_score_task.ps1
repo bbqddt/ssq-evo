@@ -1,17 +1,20 @@
-# fix_score_task.ps1 - 重建 ssq_evo_predict_score 计划任务（2026-09-02 闭环审计产物）
+# fix_score_task.ps1 - Rebuild ssq_evo_predict_score scheduled task
+# (closeout audit 2026-09-02; ASCII-only: PS5.1 reads BOM-less ps1 as ANSI/GBK
+#  and UTF-8 Chinese comments break string parsing -- keep this file ASCII!)
 #
-# 背景（审计结论）：
-#   score 任务自 2026-08-18 创建以来，7 个计划窗口（22:30）一次都没触发过；
-#   历史 8 次打分全部来自人工兜底/开机补跑。9/2 17:52 的运行即 StartWhenAvailable
-#   开机补跑（PC 在 9/1 22:30 处于关机/睡眠）。为消除"开机时机"单点依赖，
-#   改为三重冗余触发（脚本幂等，重复打分自动跳过，合并 0 期无害退出）：
-#     1) 开奖日（二/四/日）22:30 —— 主触发
-#     2) 开奖日（二/四/日）23:30 —— 夜间兜底
-#     3) 次日（一/三/五）09:00 —— 次日兜底（覆盖整夜关机的情形）
+# Audit finding: since creation on 2026-08-18 the 22:30 weekly trigger NEVER
+# fired (all 8 historical runs were manual/backfill at ~17:50-18:02). The
+# 9/2 17:52 run was a StartWhenAvailable boot catch-up (PC was off/asleep at
+# 22:30 on 9/1). To remove the "PC power-on timing" single point of failure,
+# use triple redundant triggers (idempotent script: duplicate runs are
+# skipped by predict_cron itself; merge of 0 draws exits harmlessly):
+#   1) draw days (Tue/Thu/Sun) 22:30 -- primary
+#   2) draw days (Tue/Thu/Sun) 23:30 -- night fallback
+#   3) next days (Mon/Wed/Fri) 09:00 -- next-morning fallback (overnight off)
 #
-# 运行方式（管理员 PowerShell，一次性）：
+# Run once (admin PowerShell):
 #   powershell -ExecutionPolicy Bypass -File D:\ssq_evo\fix_score_task.ps1
-# 验证：
+# Verify:
 #   Get-ScheduledTaskTrigger -TaskName ssq_evo_predict_score
 #   Get-ScheduledTaskInfo   -TaskName ssq_evo_predict_score
 
@@ -37,6 +40,5 @@ Register-ScheduledTask -TaskName "ssq_evo_predict_score" `
     -Action $action -Trigger $t1,$t2,$t3 `
     -Settings $settings -Principal $principal -Force | Out-Null
 
-Write-Host "[fix] ssq_evo_predict_score 已重建：22:30 / 23:30（二四日）+ 次日 09:00（一三五）"
+Write-Host "[fix] ssq_evo_predict_score rebuilt: 22:30/23:30 (Tue-Thu-Sun) + 09:00 (Mon-Wed-Fri)"
 Get-ScheduledTaskInfo -TaskName ssq_evo_predict_score | Format-List LastRunTime, NextRunTime, LastTaskResult
-
