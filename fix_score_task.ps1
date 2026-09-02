@@ -34,7 +34,7 @@ $settings = New-ScheduledTaskSettingsSet `
 
 $principal = New-ScheduledTaskPrincipal `
     -UserId "PC-20260623DMIY\Administrator" `
-    -LogonType S4U -RunLevel HighestAvailable
+    -LogonType S4U -RunLevel Highest
 
 Register-ScheduledTask -TaskName "ssq_evo_predict_score" `
     -Action $action -Trigger $t1,$t2,$t3 `
