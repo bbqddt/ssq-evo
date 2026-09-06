@@ -1,0 +1,32 @@
+{
+  "protocol": "PRE_REGISTERED_PROTOCOL_v1",
+  "generated_at": "2026-09-01 10:36:05",
+  "n_max": 3500,
+  "alpha": 0.05,
+  "one_sided": true,
+  "spending": "Lan-DeMets OBF: alpha*(t)=1-Phi(z_alpha/sqrt(t))",
+  "statistic": "Z_n = sum(w·X_d)/(SD1*sqrt(n)); w=unit(registered dev_pct); SD1=sqrt(162/1056)",
+  "min_look": 50,
+  "sigma_design_pct": 3.5,
+  "boundary_head": {
+    "50": Infinity,
+    "100": Infinity,
+    "200": 6.9822,
+    "500": 4.5087,
+    "1000": 3.3008,
+    "2000": 2.4868,
+    "3500": 2.0491
+  },
+  "controls": {
+    "brownian_selfcheck_fpr": 0.045,
+    "discrete_negative_fpr": 0.05,
+    "discrete_positive_power_by_3500": 0.9975,
+    "brownian_power": {
+      "1000": 0.4167,
+      "1500": 0.8392,
+      "2000": 0.9668,
+      "3000": 0.9987,
+      "3500": 0.9999
+    }
+  }
+}

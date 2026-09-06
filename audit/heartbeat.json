@@ -1,0 +1,14 @@
+{
+  "schema": "ssq_evo.heartbeat.v1",
+  "ts_local": "2026-09-06T10:34:28",
+  "ts_unix": 1788662068,
+  "last_issue": "26102",
+  "master_sha256": "b9591e72c6566ebdd9add5ab3cfd8229ec6b038e10808d951104ff00d793b97b",
+  "predictions_sha256": "6c08a1a906c30db3d1953fc3729a10b608991a6c5aceb969e06c10faf9ae26fa",
+  "last_score": {
+    "ts": "2026-09-04 17:58:04",
+    "n_new": 3,
+    "status": "INSUFFICIENT"
+  },
+  "anchor": "d020750d123bd54aa489947ebc694bbaa57aeee76cb5d050a164c112076efd0e\n# anchored_at 2026-09-01 10:38:09\n# 预注册内容此后不得修改; 重注册须另行说明理由\n# protocol fc4500d5c567e3bccf6c601119d7b0c4ce742acf33431703f1639e08315aab56"
+}
