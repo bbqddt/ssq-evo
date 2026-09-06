@@ -109,6 +109,35 @@ if (Test-Path $RetireFlag) {
         }
     }
 
+    # --- C1b: heartbeat freshness (any day) ---
+    # heartbeat.json is refreshed on each draw-day scoring (Tue/Thu/Sun 22:30).
+    # Max normal gap = 48h (Sun 22:30 -> Tue 22:30); >50h = a full draw day missed.
+    # Alert at most once per calendar day (dedup via tracker file).
+    $HbFile = Join-Path $DataDir "audit\heartbeat.json"
+    $HbTracker = Join-Path $DataDir "watchdog_hb_alert_date.txt"
+    if (Test-Path $HbFile) {
+        try {
+            $hb = Get-Content $HbFile -Encoding UTF8 -Raw | ConvertFrom-Json
+            $ageH = ((Get-Date).ToUniversalTime() - [DateTimeOffset]::FromUnixTimeSeconds([long]$hb.ts_unix).UtcDateTime).TotalHours
+            if ($ageH -gt 50) {
+                $lastAlert = ""
+                if (Test-Path $HbTracker) { $lastAlert = (Get-Content $HbTracker -Encoding UTF8 | Select-Object -First 1) }
+                if ($lastAlert -ne $today) {
+                    $m = "heartbeat stale {0:N1}h (>50h, last_issue={1}) - a full draw-day scoring run was missed" -f $ageH, $hb.last_issue
+                    Log "CRIT  $m"; Alert $m "CRITICAL"
+                    Set-Content -Path $HbTracker -Value $today -Encoding UTF8
+                } else {
+                    Log ("CRIT  heartbeat still stale ({0:N1}h, last_issue={1}) - already alerted today" -f $ageH, $hb.last_issue)
+                }
+            } else {
+                Log ("OK  heartbeat fresh ({0:N1}h old, last_issue={1})" -f $ageH, $hb.last_issue)
+                if (Test-Path $HbTracker) { Remove-Item $HbTracker -Force }
+            }
+        } catch { Log ("heartbeat parse failed: $($_.Exception.Message)") }
+    } else {
+        Log "WARN  heartbeat.json missing (audit dir)"
+    }
+
     # --- C2: Sunday evening - preregistered scorer status + anchor integrity (dedup via tracker) ---
     $WkTracker = Join-Path $DataDir "watchdog_prereg_last.txt"
     if ($dow -eq "Sunday" -and ((Get-Date).Hour -ge 20)) {

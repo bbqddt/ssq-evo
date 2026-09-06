@@ -1,0 +1,95 @@
+name: heartbeat-watchdog
+
+# Cloud watchdog for the retired ssq_evo engine's data pipeline.
+# The local PC (Windows Task Scheduler, predict_cron.ps1) refreshes
+# audit/heartbeat.json on every draw day (Tue/Thu/Sun ~22:30 CST) after the
+# scoring run finishes, then heartbeat_push.py pushes it to the data-backup
+# branch. Max normal gap = 48h (Sun 22:30 -> Tue 22:30).
+# Alert threshold = 50h  =>  at least one full draw-day scoring run was missed.
+#
+# Alert channels:
+#   1. GitHub issue labeled "heartbeat-alert" (always on; fires GitHub email/app
+#      notifications to the repo owner). Auto-closed on recovery.
+#   2. Server-chan WeChat push (optional): add repo secret WECHAT_SENDKEY
+#      (get it free at https://sct.ftqq.com with a WeChat scan; no card needed).
+
+on:
+  schedule:
+    # every 6h at :23  =>  09:23 / 15:23 / 21:23 / 03:23 Beijing time
+    - cron: "23 */6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+
+jobs:
+  check-heartbeat:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check heartbeat freshness
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          WECHAT_SENDKEY: ${{ secrets.WECHAT_SENDKEY }}
+        run: |
+          python3 - <<'PYEOF'
+          import base64, json, os, time, urllib.request, urllib.parse
+
+          REPO = os.environ["REPO"]
+          TOKEN = os.environ.get("GH_TOKEN")
+          SENDKEY = os.environ.get("WECHAT_SENDKEY", "")
+          THRESHOLD_S = 50 * 3600
+
+          def api(url, method="GET", payload=None):
+              data = json.dumps(payload).encode() if payload is not None else None
+              req = urllib.request.Request(url, data=data, method=method, headers={
+                  "Authorization": "Bearer " + TOKEN,
+                  "Accept": "application/vnd.github+json",
+                  "User-Agent": "heartbeat-watchdog",
+              })
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.loads(r.read().decode() or "{}")
+
+          hb = api("https://api.github.com/repos/%s/contents/audit/heartbeat.json?ref=data-backup" % REPO)
+          data = json.loads(base64.b64decode(hb["content"]))
+          age_s = time.time() - int(data["ts_unix"])
+          age_h = age_s / 3600.0
+          last_issue = data.get("last_issue", "?")
+          print("heartbeat age: %.1f h (last_issue=%s)" % (age_h, last_issue))
+          stale = age_s > THRESHOLD_S
+
+          issues = api("https://api.github.com/repos/%s/issues?labels=heartbeat-alert&state=open" % REPO)
+          open_alert = issues[0] if issues else None
+
+          if stale:
+              if open_alert:
+                  api(open_alert["comments_url"], "POST", {
+                      "body": "Still stale: **%.1f h** since last beat (last_issue=%s)." % (age_h, last_issue)})
+                  print("alert issue #%s updated" % open_alert["number"])
+              else:
+                  created = api("https://api.github.com/repos/%s/issues" % REPO, "POST", {
+                      "title": "[WATCHDOG] local heartbeat stale > 50h",
+                      "body": ("Local ssq_evo heartbeat is stale: **%.1f h** since last beat "
+                               "(last_issue=%s, threshold 50h). At least one full draw-day "
+                               "scoring run was missed.\n\nCheck:\n- Is the PC powered on?\n"
+                               "- Is Task Scheduler task predict_cron running?\n"
+                               "- Tail of D:/ssq_evo_data/predict_cron.log") % (age_h, last_issue),
+                      "labels": ["heartbeat-alert"]})
+                  print("alert issue #%s created" % created["number"])
+              if SENDKEY:
+                  try:
+                      desp = urllib.parse.quote("heartbeat stale %.1f h (last_issue=%s). Check local PC / Task Scheduler / predict_cron.log." % (age_h, last_issue))
+                      urllib.request.urlopen("https://sctapi.ftqq.com/%s.send?title=ssq_evo+heartbeat+stale&desp=%s" % (SENDKEY, desp), timeout=15)
+                      print("serverchan WeChat push sent")
+                  except Exception as e:
+                      print("serverchan push failed:", e)
+              else:
+                  print("WECHAT_SENDKEY not set - skip WeChat push (GitHub issue/email still active)")
+          else:
+              print("HEARTBEAT OK")
+              if open_alert:
+                  api("https://api.github.com/repos/%s/issues/%s" % (REPO, open_alert["number"]), "PATCH", {"state": "closed"})
+                  api(open_alert["comments_url"], "POST", {
+                      "body": "Recovered: heartbeat fresh again (age %.1f h). Auto-closed." % age_h})
+                  print("recovered, auto-closed issue #%s" % open_alert["number"])
+          PYEOF
