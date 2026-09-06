@@ -2,7 +2,44 @@
 
 > 本文件是系统唯一权威运行手册。任何重构、排障、交接都先读它。
 > 维护规则：改了任何架构/脚本/调度，必须同步更新本文件对应小节，否则视为未完成。
-> 最后更新：2026-08-20
+> 最后更新：2026-09-06
+
+---
+
+## 0. 当前布局（2026-09-06，引擎退役后权威版）
+
+> ⚠️ 下方 §1–§8 描述的是退役前的三驾车架构，仅作历史参考。
+> **2026-08-31 起引擎正式退役**（决策记录 `ENGINE_RETIREMENT_20260831.md`，
+> flag `D:\ssq_evo_data\ENGINE_RETIRED`，`docker-compose.yml` 已改名 `.RETIRED` 防 compose 恢复）。
+
+退役后**仍在跑的生产链**（全部零 Docker 依赖）：
+
+```
+本机（Windows 计划任务，二/四/日）
+  18:00  predict_cron.ps1  → 登记 2610X 期预测（预注册时间戳，不可篡改）
+  22:30  predict_cron.ps1  → 抓开奖 + 合并主表 + OBF 打分
+                             └ 成功后 → heartbeat_push.py → GitHub data-backup 分支
+                                        （心跳 + 主表 + 锚点等 16 个关键文件备份）
+
+监控层（三层独立哨兵，任一触发即报警）：
+  L1 本机 watchdog.ps1 v4.1（每 15min）
+     - C1  开奖日 23:00 后：主表当日合并 + score DONE
+     - C1b 心跳新鲜度：>50h = 错过一整个开奖日 → watchdog_alert.log + 事件日志（每日最多 1 次）
+     - C2  周日晚：预注册打分状态 + 锚点完整性
+  L2 GitHub Actions heartbeat-watchdog.yml（每 6h，云端）
+     - 检查 data-backup 分支心跳，>50h 自动开/更新 issue「heartbeat-alert」
+       （GitHub 邮件/App 通知直达用户）；恢复后自动关单
+     - 可选微信推送：仓库 secret 加 WECHAT_SENDKEY（Server酱免费版，微信扫码取 key）
+  L3 WorkBuddy 自动化「ssq_evo 心跳巡检」（每日 09:30）
+     - 经 api.github.com 读心跳，>50h 在对话里喊用户
+
+确认层（冻结引擎的纯前瞻检验，不再拟合）：
+  - OBF 序贯确认：MIN_NEW=50，n_max=3500，仅计 2026-09-01 后开奖
+  - 预注册锚点 sha256 锚定，watchdog 周日晚自动校验
+```
+
+告警阈值 50h 的依据：正常最大间隔 = 周日 22:30 → 周二 22:30 = 48h；
+超 50h ⇒ 至少错过一整个开奖日的打分（PC 关机/计划任务坏/管道故障）。
 
 ---
 
