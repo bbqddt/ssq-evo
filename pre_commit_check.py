@@ -35,6 +35,8 @@ HOST_ONLY_PY = {
     "preregistered_scorer.py",       # 预注册前瞻打分器(ARTIFACT_SUSPECTED 零成本推进路径)
     "obf_design.py",                 # OBF 序贯设计器(边界递推+双对照, 宿主 venv 跑)
     "physical_prior_bayes.py",       # 制造公差贝叶斯先验 MC(次级证据, 宿主跑写 audit/)
+    "heartbeat_make.py",             # 心跳生成器(cloud watchdog 数据源, 宿主跑)
+    "heartbeat_push.py",             # 心跳+数据快照推送 data-backup 分支(宿主 venv 跑)
 }
 
 

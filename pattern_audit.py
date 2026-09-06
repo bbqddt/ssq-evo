@@ -38,6 +38,7 @@ HOST_ONLY_PY = {
     "pre_commit_check.py", "verify_deployment.py",
     "verify_automation_reachability.py", "verify_firewall.py",
     "ssq_health.py", "smoke_test.py", "benchmark_speed.py",
+    "heartbeat_make.py", "heartbeat_push.py",
 }
 
 FILE_METHODS = ("flush", "fileno", "close", "write", "read", "writelines", "truncate")

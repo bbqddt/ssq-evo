@@ -45,6 +45,13 @@ try {
         & $Py $PyScript "auto" "--phase" $Phase 2>&1 | ForEach-Object { Log $_ }
     }
     Log "DONE phase=$Phase exit=$LASTEXITCODE"
+    # Heartbeat + data snapshot to GitHub data-backup branch (cloud watchdog reads this).
+    # Fire after score phase (the phase that ingests the draw) or after full run.
+    if (($Phase -eq "score" -or $Phase -eq "both") -and $LASTEXITCODE -eq 0) {
+        $hbOut = & $Py (Join-Path $Repo "heartbeat_push.py") 2>&1
+        foreach ($line in $hbOut) { Log "hb: $line" }
+        Log "HEARTBEAT exit=$LASTEXITCODE"
+    }
 } catch {
     Log "ERROR phase=$Phase : $_"
     exit 1
