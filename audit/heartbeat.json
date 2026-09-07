@@ -1,10 +1,10 @@
 {
   "schema": "ssq_evo.heartbeat.v1",
-  "ts_local": "2026-09-06T10:36:40",
-  "ts_unix": 1788662200,
-  "last_issue": "26102",
-  "master_sha256": "b9591e72c6566ebdd9add5ab3cfd8229ec6b038e10808d951104ff00d793b97b",
-  "predictions_sha256": "6c08a1a906c30db3d1953fc3729a10b608991a6c5aceb969e06c10faf9ae26fa",
+  "ts_local": "2026-09-07T17:51:19",
+  "ts_unix": 1788774679,
+  "last_issue": "26103",
+  "master_sha256": "d05e84eeed7ad3a00a58bc070ce3ae82d2edc374db15ca64cda31d2a66e6b517",
+  "predictions_sha256": "ef8edb5afdd89aae274b2e20da2a7bb708cdd3eb6405f5d4d8ce9f8e2f1d575a",
   "last_score": {
     "ts": "2026-09-04 17:58:04",
     "n_new": 3,
