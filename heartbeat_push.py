@@ -73,6 +73,15 @@ def git_bytes(args, cwd, inp_bytes=None, check=True):
 
 def remote_branch_exists():
     r = git(GIT_NET + ["ls-remote", "--heads", "origin", BRANCH], cwd=REPO, check=False)
+    if r.returncode != 0:
+        # Network failure (proxy down / github unreachable) is NOT "branch missing".
+        # Treating it as missing would wrongly trigger bootstrap_orphan_branch(),
+        # whose `git branch -f data-backup` then collides with the existing worktree
+        # (fatal: cannot force update the branch used by worktree) and masks the real
+        # cause. Surface the network error instead.
+        raise RuntimeError(
+            "ls-remote origin failed exit=%d (network/proxy down?); refusing to bootstrap"
+            % r.returncode)
     return BRANCH in (r.stdout or "")
 
 def bootstrap_orphan_branch():
