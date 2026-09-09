@@ -100,6 +100,15 @@ def anchor():
     return _sha256_of(entries[0][1])
 
 
+def _sha256_lf(path):
+    """sha256 of the file with CRLF normalized to LF (git-blob basis)."""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        h.update(f.read().replace(b"\r\n", b"\n"))
+    return h.hexdigest()
+
+
 def verify_anchor():
     """校验注册向量/协议/边界表与 git 锚点是否一致。无锚点 ⇒ (False, '未锚定')。"""
     reg_path = paths.p(*REG_PATH)
@@ -112,19 +121,32 @@ def verify_anchor():
     current = _sha256_of(reg_path)
     if current != anchored:
         return False, "不一致! 注册向量在锚定后被修改"
+    n_checked = 0
     for l in lines:
-        if l.startswith("# ") and len(l.split()) >= 3 and l.split()[1].count(".") == 0 \
-                and len(l.split()[1]) == 64:
-            parts = l.split()
-            name, h = parts[1], parts[2]
-            p = (os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              "PRE_REGISTERED_PROTOCOL_v1.md") if name == "protocol"
-                 else paths.p(*BOUND_PATH))
-            if not os.path.exists(p):
-                return False, "锚定文件缺失: %s" % name
-            if _sha256_of(p) != h:
-                return False, "不一致! %s 在锚定后被修改" % name
-    return True, "一致(registry+protocol+boundary)"
+        if not l.startswith("# "):
+            continue
+        parts = l.split()
+        # 锚行格式: "# <name> <64hex> <filename> ..."，
+        # 例: "# protocol fc4500d5... PRE_REGISTERED_PROTOCOL_v1.md"
+        # 旧条件把 len==64 套在 parts[1]（名字，如 'protocol'=8字符）上，
+        # 永远为假 → 协议/边界两项校验从未真正执行（死代码，2026-09-09 修复）。
+        if len(parts) < 4 or len(parts[2]) != 64:
+            continue
+        name, h = parts[1], parts[2]
+        p = (os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "PRE_REGISTERED_PROTOCOL_v1.md") if name == "protocol"
+             else paths.p(*BOUND_PATH))
+        if not os.path.exists(p):
+            return False, "锚定文件缺失: %s" % name
+        # 锚定会话（2026-09-01）的 hash 基准混用：registry/boundary 按 CRLF
+        # 原文、protocol 按 git 归一化 LF。行尾差异不是内容修改，两者任一
+        # 匹配即视为未篡改；内容被改则两种基准都不可能命中。
+        if _sha256_of(p) != h and _sha256_lf(p) != h:
+            return False, "不一致! %s 在锚定后被修改" % name
+        n_checked += 1
+    if n_checked == 0:
+        return False, "锚存档中未解析出 protocol/boundary 条目"
+    return True, "一致(registry+protocol+boundary, %d+1 项实校)" % n_checked
 
 
 def score(min_new=MIN_NEW, verbose=True):

@@ -131,7 +131,12 @@ def main():
         n += 1
     log("copied %d files" % n)
     # 4. commit + push inside worktree only
-    git(GIT_RAW + ["add", "-A"], cwd=WT, check=False)
+    # --renormalize is REQUIRED (not just add -A): copy2 preserves the source
+    # mtime, so re-copied files can hit git's stat cache and be skipped as
+    # "unchanged" even when the index blob (LF, from autocrlf era) differs from
+    # working bytes (CRLF). renormalize forces re-filtering of every tracked
+    # file; combined with core.autocrlf=false the blob becomes byte-exact.
+    git(GIT_RAW + ["add", "--renormalize", "-A"], cwd=WT, check=False)
     st = git(GIT_RAW + ["status", "--porcelain"], cwd=WT, check=False)
     if st.stdout.strip():
         issue = "unknown"
@@ -141,6 +146,12 @@ def main():
         except Exception as e:
             log("issue parse fallback: %s" % e)
         git(GIT_RAW + GIT_NOHOOK + ["commit", "-m", "heartbeat %s %s" % (issue, datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))], cwd=WT)
+    # Push whenever local BRANCH is ahead of origin, regardless of whether this
+    # run committed: a push killed after commit (e.g. process SIGTERM mid-push)
+    # must not leave the remote stale while future runs report "no changes".
+    git(GIT_NET + ["fetch", "--quiet", "origin", BRANCH], cwd=WT, check=False)
+    ahead = git(["rev-list", "--count", "FETCH_HEAD..%s" % BRANCH], cwd=WT, check=False)
+    if (ahead.stdout or "0").strip() not in ("", "0"):
         git(GIT_NET + ["push", "origin", "%s:%s" % (BRANCH, BRANCH)], cwd=WT)
         log("OK pushed %s" % BRANCH)
     else:
