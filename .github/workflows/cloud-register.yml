@@ -1,0 +1,74 @@
+name: cloud-register
+
+# 云端兜底预注册（2026-09-09 设计落地）：
+#   PC 在开奖日 18:00 关机/掉线时的最后防线。开奖日 18:30（北京时间）在云端登记预测，
+#   commit 时间戳 = GitHub 侧第三方背书的预注册证据，且完全摆脱 PC 开机依赖。
+# 配合本地 sync_cloud()（predict_tonight.auto 开头）：本地 register/score 前先拉取
+# data-backup 合并（union by issue，最早 registered_ts 胜，已打分条目不可变）。
+# 幂等：auto:register 自带"已登记跳过 + 已开奖跳过 + 过 21:15 拒绝补登记"三重守卫。
+
+on:
+  schedule:
+    # 18:30 北京时间 = 10:30 UTC；开奖日 周二/四/日 = 2,4,0。
+    # GitHub cron 可能延迟 ~15 分钟，代码内 21:15 守卫会拒绝任何开奖后才跑到的执行。
+    - cron: "30 10 * * 2,4,0"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cloud-register
+  cancel-in-progress: false
+
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code (main)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install numpy tzdata
+
+      - name: Stage data dir from data-backup branch
+        run: |
+          set -e
+          git fetch origin data-backup
+          mkdir -p cloud_data
+          git show FETCH_HEAD:ssq_master.csv    > cloud_data/ssq_master.csv
+          git show FETCH_HEAD:predictions.jsonl > cloud_data/predictions.jsonl
+          if git show FETCH_HEAD:frontier.json > cloud_data/frontier.json 2>/dev/null; then
+            echo "frontier.json staged (comp-ensemble method parity with local)"
+          else
+            echo "frontier.json absent on data-backup; register falls back to marginal (recorded honestly in method field)"
+          fi
+
+      - name: Register prediction (draw-day + pre-21:15 Beijing guarded, idempotent)
+        env:
+          DATA_DIR: ${{ github.workspace }}/cloud_data
+        run: python predict_tonight.py auto --phase register
+
+      - name: Push updated predictions.jsonl to data-backup
+        run: |
+          set -e
+          if git diff --no-index --quiet <(git show FETCH_HEAD:predictions.jsonl) cloud_data/predictions.jsonl; then
+            echo "no change (already registered / not a draw day / post-draw guard rejected); nothing to push"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -q -B data-backup-work FETCH_HEAD
+          cp cloud_data/predictions.jsonl predictions.jsonl
+          git add predictions.jsonl
+          git commit -m "cloud-register: pre-draw registration ($(date -u +%Y-%m-%dT%H:%MZ))"
+          git push origin HEAD:data-backup

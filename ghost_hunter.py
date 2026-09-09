@@ -37,6 +37,7 @@ STDLIB = {
     'typing', 'unicodedata', 'unittest', 'urllib', 'uu', 'uuid', 'venv',
     'warnings', 'wave', 'weakref', 'webbrowser', 'winreg', 'winsound', 'wsgiref',
     'xdrlib', 'xml', 'xmlrpc', 'zipapp', 'zipfile', 'zipimport', 'zlib',
+    'zoneinfo',  # stdlib since 3.9 (PEP 615); missing from the original list
 }
 
 # 常见第三方库白名单

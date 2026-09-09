@@ -29,6 +29,18 @@ PRED_FILE = os.path.join(DATA_DIR, "predictions.jsonl")
 RED_N, BLUE_N = 33, 16
 RED_PICK, BLUE_PICK = 6, 1
 
+
+def _now_beijing():
+    """北京时间的 now()。云端 GitHub Actions runner 是 UTC，直接用 now() 会把
+    21:15 守卫和时间戳算错时区；本机就是北京时间，zoneinfo 不可用时退回本地时钟
+    （本机行为不变）。"""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.datetime.now(ZoneInfo("Asia/Shanghai"))
+    except Exception:
+        return datetime.datetime.now()
+
+
 # 预测方法默认超参
 WINDOW = 150      # 尾窗长度（前序多少期参与）
 DECAY = 0.985     # 指数衰减（越近期权重越高）；0.985^150≈0.10
@@ -301,7 +313,7 @@ def register(issue, target_date, window=WINDOW, decay=DECAY, signal=None, method
     entry = {
         "issue": issue,
         "target_date": target_date,
-        "registered_ts": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "registered_ts": _now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
         "method": method_name,
         "params": params,
         "engine_forecast": {"reds": reds, "blue": blue},
@@ -517,6 +529,80 @@ def _summarize_scored():
           f"蓝球 {e_blue} / {b_blue}；引擎不劣于基线 {eng_win}/{n} 期。")
 
 
+def sync_cloud():
+    """从 GitHub data-backup 分支拉取云端登记的预测，合并进本地 predictions.jsonl。
+
+    背景：cloud-register workflow（GitHub Actions，开奖日 18:30 北京时间）在 PC 关机时
+    兜底登记。本地在 register/score 前必须先对齐，否则会出现"云端登记了、本地没看到
+    → 漏打分，且 22:35 心跳推送会用本地文件把云端登记覆盖掉"。
+
+    合并规则：
+      - 按 issue 做 union：云端有、本地没有 → 并入；
+      - 同 issue 冲突 → registered_ts 更早者胜（先登记的才是有效预注册；云端 18:30 vs
+        本地 18:00，本地赢；PC 关机时云端 18:30 vs 本地补跑 18:40，云端赢）；
+      - 本地已打分(scored=True)的条目永不被替换（历史记录不可变）。
+    网络失败（代理未起 / GitHub 不可达）只警告不阻断：本地文件是打分的权威源。
+    """
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["git", "-c", "http.sslBackend=openssl", "fetch", "--quiet", "origin", "data-backup"],
+            cwd=HERE, capture_output=True, text=True, timeout=180)
+        if r.returncode != 0:
+            print(f"[sync] 警告：fetch data-backup 失败（网络/代理？），仅用本地预测文件继续。"
+                  f"err={(r.stderr or '').strip()[:120]}")
+            return
+        s = subprocess.run(["git", "show", "FETCH_HEAD:predictions.jsonl"],
+                           cwd=HERE, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=60)
+        if s.returncode != 0:
+            print("[sync] data-backup 上暂无 predictions.jsonl，跳过合并。")
+            return
+        remote = []
+        for line in (s.stdout or "").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    remote.append(json.loads(line))
+                except Exception as _e:
+                    ssq_log.log_exception("sync_cloud", _e,
+                                          f"corrupt remote jsonl line skipped: {line[:60]}")
+        if not remote:
+            print("[sync] 云端无预测记录，跳过。")
+            return
+        local = load_preds()
+        by_issue = {p.get("issue"): p for p in local}
+        changed = False
+        for rp in remote:
+            iss = rp.get("issue")
+            if not iss:
+                continue
+            if iss not in by_issue:
+                local.append(rp)
+                by_issue[iss] = rp
+                changed = True
+                print(f"[sync] 并入云端登记：{iss}（ts={rp.get('registered_ts')}）")
+            else:
+                lp = by_issue[iss]
+                if lp.get("scored"):
+                    continue  # 已打分条目不可变
+                if (rp.get("registered_ts") or "9999") < (lp.get("registered_ts") or "9999"):
+                    local[local.index(lp)] = rp
+                    by_issue[iss] = rp
+                    changed = True
+                    print(f"[sync] {iss}：云端登记更早（{rp.get('registered_ts')} < "
+                          f"{lp.get('registered_ts')}），采用云端。")
+        if changed:
+            with open(PRED_FILE, "w", encoding="utf-8") as f:
+                for p in local:
+                    f.write(json.dumps(p, ensure_ascii=False) + "\n")
+            print(f"[sync] 合并完成，本地共 {len(local)} 条登记。")
+        else:
+            print("[sync] 云端与本地一致，无合并。")
+    except Exception as e:
+        print(f"[sync] 警告：云端同步异常（{e}），仅用本地预测文件继续。")
+
+
 def auto(phase="both", signal="red_gap_max", window=WINDOW, decay=DECAY, method=None):
     """开奖日自动流程（供周期性自动化调用）：
       register: 今天若为开奖日(周二/四/日)且下一期尚未登记，则公式驱动预注册(开奖前，时间戳不可篡改)。
@@ -527,6 +613,10 @@ def auto(phase="both", signal="red_gap_max", window=WINDOW, decay=DECAY, method=
     today = datetime.date.today().strftime("%Y-%m-%d")
     wd = datetime.date.today().weekday()
     is_draw_day = wd in (1, 3, 6)  # 周一=0 … 周日=6 → 周二/四/日
+
+    # 先与云端(data-backup 分支)对齐：PC 关机时 GitHub Actions 会兜底登记，
+    # 本地 register（避免重复登记）和 score（避免漏打分/被心跳覆盖）都必须先看到它。
+    sync_cloud()
 
     if phase in ("both", "register"):
         if not is_draw_day:
@@ -539,9 +629,10 @@ def auto(phase="both", signal="red_gap_max", window=WINDOW, decay=DECAY, method=
             elif any(p["issue"] == nxt for p in load_preds()):
                 print(f"[auto:register] {nxt} 已预注册，保留原时间戳，不覆盖。")
             else:
-                # 诚实性守卫（2026-09-09）：开奖时刻(21:15)之后不得补登记——那是"开奖后信息"，
+                # 诚实性守卫（2026-09-09）：开奖时刻(21:15，北京时间)之后不得补登记——那是"开奖后信息"，
                 # 事后选号伪装成预测 = 污染记录。样本作废优于记录污染（红线：诚实优先）。
-                hhmm = datetime.datetime.now().strftime("%H:%M")
+                # 注意必须用 _now_beijing()：云端 runner 是 UTC，裸 now() 会算错时区。
+                hhmm = _now_beijing().strftime("%H:%M")
                 if hhmm >= "21:15":
                     print(f"[auto:register] 放弃补登记 {nxt}：当前 {hhmm} 已过开奖时刻 21:15，"
                           f"事后登记=污染预测记录，本期预测样本作废（诚实损失）。")

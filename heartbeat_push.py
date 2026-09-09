@@ -20,6 +20,7 @@ README_TEXT = ("ssq_evo data-backup branch. Auto-updated by heartbeat_push.py "
 FILES = [
     (r"D:\ssq_evo_data\ssq_master.csv",                         "ssq_master.csv"),
     (r"D:\ssq_evo_data\predictions.jsonl",                      "predictions.jsonl"),
+    (r"D:\ssq_evo_data\frontier.json",                          "frontier.json"),  # comp_elites(gen=4)：cloud-register 用同一套公式树，方法对齐
     (os.path.join(AUDIT, "heartbeat.json"),                     os.path.join("audit", "heartbeat.json")),
     (os.path.join(AUDIT, "preregistered_scores.jsonl"),         os.path.join("audit", "preregistered_scores.jsonl")),
     (os.path.join(AUDIT, "obf_boundary.csv"),                   os.path.join("audit", "obf_boundary.csv")),
