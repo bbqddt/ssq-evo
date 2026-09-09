@@ -103,6 +103,71 @@ def bootstrap_orphan_branch():
     git(GIT_NET + ["push", "origin", BRANCH], cwd=REPO)
     log("bootstrap: pushed initial %s" % BRANCH)
 
+def self_test():
+    """Failure-injection self-test for remote_branch_exists() — offline, no real
+    repo/data touched (runs in a temp dir). 2026-09-10: the 09-09 incident proved
+    that glue code needs the same negative/positive controls as the statistics
+    pipeline, otherwise bugs surface as live incidents instead of test failures.
+      Case A (negative control): unreachable remote MUST raise, never bootstrap.
+      Case B: remote reachable but branch missing -> False, no raise.
+      Case C (positive control): branch present -> True.
+    """
+    import tempfile
+    old_repo = REPO
+    results = []
+    tmp = tempfile.mkdtemp(prefix="hb_selftest_")
+    try:
+        work = os.path.join(tmp, "work")
+        os.makedirs(work)
+        git(["init", "-q"], cwd=work, check=False)
+        git(["config", "user.email", "selftest@local"], cwd=work, check=False)
+        git(["config", "user.name", "selftest"], cwd=work, check=False)
+        with open(os.path.join(work, "seed.txt"), "w") as f:
+            f.write("seed\n")
+        git(["add", "-A"], cwd=work, check=False)
+        git(["commit", "-q", "-m", "seed"], cwd=work, check=False)
+        bare = os.path.join(tmp, "remote.git").replace("\\", "/")
+        git(["init", "-q", "--bare", bare], cwd=work, check=False)
+        globals()["REPO"] = work
+
+        # Case A: connection-refused remote must RAISE (the 09-09 bug treated
+        # exactly this as "branch missing" and wrongly bootstrapped).
+        git(["remote", "add", "origin", "https://127.0.0.1:9/unreachable.git"],
+            cwd=work, check=False)
+        raised = False
+        try:
+            remote_branch_exists()
+        except RuntimeError as e:
+            raised = "refusing to bootstrap" in str(e)
+        results.append(("unreachable remote raises (no bogus bootstrap)", raised))
+
+        # Case B: reachable remote, data-backup absent -> False without raising.
+        git(["remote", "set-url", "origin", bare], cwd=work, check=False)
+        git(["push", "-q", "origin", "HEAD:refs/heads/main"], cwd=work, check=False)
+        missing_ok = False
+        try:
+            missing_ok = (remote_branch_exists() is False)
+        except Exception as e:
+            log("self-test case B unexpected raise: %s" % e)
+        results.append(("reachable remote, branch missing -> False", missing_ok))
+
+        # Case C: data-backup present -> True.
+        git(["push", "-q", "origin", "HEAD:refs/heads/%s" % BRANCH], cwd=work, check=False)
+        present_ok = False
+        try:
+            present_ok = (remote_branch_exists() is True)
+        except Exception as e:
+            log("self-test case C unexpected raise: %s" % e)
+        results.append(("branch present -> True", present_ok))
+    finally:
+        globals()["REPO"] = old_repo
+        shutil.rmtree(tmp, ignore_errors=True)
+    ok = all(passed for _, passed in results)
+    for name, passed in results:
+        log("SELF-TEST %s: %s" % ("PASS" if passed else "FAIL", name))
+    log("SELF-TEST %s" % ("PASS" if ok else "FAIL"))
+    return ok
+
 def main():
     log("=== heartbeat_push start ===")
     # 0. hard safety guard
@@ -159,6 +224,12 @@ def main():
     log("=== heartbeat_push done ===")
 
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        try:
+            sys.exit(0 if self_test() else 1)
+        except Exception as e:
+            log("SELF-TEST ERROR: %s" % e)
+            sys.exit(2)
     try:
         main()
         sys.exit(0)
