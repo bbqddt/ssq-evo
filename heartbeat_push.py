@@ -40,6 +40,10 @@ GIT_NET = ["-c", "http.sslBackend=openssl", "-c", "credential.helper=wincred"]
 # data-only branch: code-check hook does not apply (no code files in snapshot);
 # override hooks path per-command instead of copying the checker into the backup
 GIT_NOHOOK = ["-c", "core.hooksPath=NUL:"]
+# byte-exact snapshots (2026-09-09): keep CRLF exactly as on disk so a restored
+# file hashes to the pre-registered anchor; autocrlf would store LF and break
+# anchor reproduction after disaster recovery (d020750d vs 6eef6874 lesson).
+GIT_RAW = ["-c", "core.autocrlf=false"]
 
 def log(msg):
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -126,8 +130,8 @@ def main():
         n += 1
     log("copied %d files" % n)
     # 4. commit + push inside worktree only
-    git(["add", "-A"], cwd=WT, check=False)
-    st = git(["status", "--porcelain"], cwd=WT, check=False)
+    git(GIT_RAW + ["add", "-A"], cwd=WT, check=False)
+    st = git(GIT_RAW + ["status", "--porcelain"], cwd=WT, check=False)
     if st.stdout.strip():
         issue = "unknown"
         try:
@@ -135,7 +139,7 @@ def main():
                 issue = json.load(f).get("last_issue") or "unknown"
         except Exception as e:
             log("issue parse fallback: %s" % e)
-        git(GIT_NOHOOK + ["commit", "-m", "heartbeat %s %s" % (issue, datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))], cwd=WT)
+        git(GIT_RAW + GIT_NOHOOK + ["commit", "-m", "heartbeat %s %s" % (issue, datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))], cwd=WT)
         git(GIT_NET + ["push", "origin", "%s:%s" % (BRANCH, BRANCH)], cwd=WT)
         log("OK pushed %s" % BRANCH)
     else:

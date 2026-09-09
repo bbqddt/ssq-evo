@@ -539,9 +539,16 @@ def auto(phase="both", signal="red_gap_max", window=WINDOW, decay=DECAY, method=
             elif any(p["issue"] == nxt for p in load_preds()):
                 print(f"[auto:register] {nxt} 已预注册，保留原时间戳，不覆盖。")
             else:
-                register(nxt, today, window, decay, signal=signal, method=method)
-                tag = f"公式驱动复合树集成" if method == "comp" or (method is None and load_comp_trees()) else f"公式驱动 {signal}"
-                print(f"[auto:register] 已为 {today}(开奖日) 预注册 {nxt}（{tag} + 随机基线）。")
+                # 诚实性守卫（2026-09-09）：开奖时刻(21:15)之后不得补登记——那是"开奖后信息"，
+                # 事后选号伪装成预测 = 污染记录。样本作废优于记录污染（红线：诚实优先）。
+                hhmm = datetime.datetime.now().strftime("%H:%M")
+                if hhmm >= "21:15":
+                    print(f"[auto:register] 放弃补登记 {nxt}：当前 {hhmm} 已过开奖时刻 21:15，"
+                          f"事后登记=污染预测记录，本期预测样本作废（诚实损失）。")
+                else:
+                    register(nxt, today, window, decay, signal=signal, method=method)
+                    tag = f"公式驱动复合树集成" if method == "comp" or (method is None and load_comp_trees()) else f"公式驱动 {signal}"
+                    print(f"[auto:register] 已为 {today}(开奖日) 预注册 {nxt}（{tag} + 随机基线）。")
 
     if phase in ("both", "score"):
         # 对所有'已登记未打分'的期调 score()；score() 内部先 fetch 最新开奖并合并进主表，
