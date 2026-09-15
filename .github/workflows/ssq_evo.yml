@@ -124,10 +124,23 @@ jobs:
           pattern: cand-seed-*
           merge-multiple: true
 
-      - name: Merge into candidates.json
+      - name: Merge seed proposals (merge-only, no statistical judgment)
         run: python merge_candidates.py _cands candidates.json
 
-      - name: Push proposal to ga-candidates (orphan branch, only candidates.json)
+      - name: Cloud PREFILTER only (not a gate — full gate stays local)
+        run: |
+          # 诚实红线：本步骤【只是预过滤/留痕】，不运行 BH-FDR、不运行 OOT、不运行随机重放。
+          # 任何未经验证的层都不得假称闸门：完整闸门（label_axis 分层 null + BH-FDR + OOT +
+          # random_control_label 构造伪结构拦截 + #41 walk-forward）只由本地驾1
+          # （ingest_candidates.py，真实数据 D:\ssq_evo_data）执行。
+          # 晋级链现状（如实描述）：过闸 SURVIVOR 种子自动并入 frontier.json（既有设计）；
+          # 晋级生产候选集由 firewall.promote() 强制人类签字（human_signoff=True）。
+          python verify_candidates.py --candidates _cands --output verified_candidates.json
+          echo "::notice::诚实声明：云端仅为提案预过滤（PENDING_LOCAL_VERIFICATION），SIGNAL/NULL 判定权在本地统一闸门"
+          echo "::notice::预过滤时间戳：$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          echo "::notice::提醒：生产晋级必须经 firewall.promote(human_signoff=True)，无人签字即拒绝"
+
+      - name: Push proposal to ga-candidates (orphan branch, proposals only)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -135,6 +148,8 @@ jobs:
           git config user.email "bot@ssq-evo.local"
           git checkout --orphan ga-candidates
           git rm -r --cached . >/dev/null 2>&1 || true
-          git add candidates.json
-          git commit -m "proposal: distributed GA candidates $(date -u +%Y%m%dT%H%M%SZ)" || echo "no-change"
+          # candidates.json 是驾1 ingest_candidates.py 硬编码的摄入文件名（ref=ga-candidates），
+          # 必须保持此名；verified_candidates.json 仅作云端预过滤审计副本。
+          git add candidates.json verified_candidates.json
+          git commit -m "proposal: GA candidates $(date -u +%Y%m%dT%H%M%SZ) (pre-filter only, gate=local)" || echo "no-change"
           git push --force origin HEAD:ga-candidates

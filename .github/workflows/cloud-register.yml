@@ -35,7 +35,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Install deps
         run: pip install numpy tzdata
@@ -53,6 +53,9 @@ jobs:
             echo "frontier.json absent on data-backup; register falls back to marginal (recorded honestly in method field)"
           fi
 
+      - name: 输出诚实声明
+        run: |
+          echo "::notice::诚实声明：当前引擎结论 walk-forward = NULL，预测为 null 域外样本检验，不构成预知或投注建议"
       - name: Register prediction (draw-day + pre-21:15 Beijing guarded, idempotent)
         env:
           DATA_DIR: ${{ github.workspace }}/cloud_data
