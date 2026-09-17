@@ -19,6 +19,17 @@ artifact_prone.json
 daily_digest.jsonl
 daemon.log
 audit/
+
+# 运行时日志目录/数据库/快照（防意外 git add 泄露）
+logs/
+state/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # 扩轴+分层空模型证据账本（运行时追加写，不进仓库）
 evidence_ledger.json
 # 防火墙审计账本 + 生产候选（运行时追加；含来源留痕与晋级签字，不进仓库）
