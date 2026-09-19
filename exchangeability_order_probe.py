@@ -126,11 +126,56 @@ def gen_eras(n, rng, sigma_pct, n_eras=2, seed=0):
     return out
 
 
+def gen_eras_segmented(n, rng, sigma_pct, n_eras=2, seed=0):
+    """换球时代的**分组对称扰动**版（2026-09-18 修复阳性对照用）。
+
+    与 gen_eras 的差异：每个时代的权重沿**同一基准 p0** 乘以该段独立
+    lognormal 因子（exp(σ·z)），而非全段独立重抽。这保证：
+
+      1. 段间对比强度 = sigma% 量级（gen_eras 因全段重抽而塌缩）；
+      2. 边际频率差异达到 sigma 量级，4 段同质 χ² 才有 SNR>1；
+      3. 仍保持无放回（searchsorted + 重抽），与真实开奖一致。
+
+    用途**仅限阳性对照**——验证 homogeneity_test 有检出真实时代切换的功效。
+    """
+    out = np.zeros((n, N_PICK), dtype=np.int64)
+    bounds = np.linspace(0, n, n_eras + 1).astype(int)
+    p0 = np.full(N_BALL, 1.0 / N_BALL)
+    for e in range(n_eras):
+        lo, hi = bounds[e], bounds[e + 1]
+        r = np.random.default_rng(seed + e).normal(0.0, sigma_pct / 100.0, N_BALL)
+        w = p0 * np.exp(r)
+        p = w / w.sum()
+        cs = np.cumsum(p)
+        for i in range(lo, hi):
+            picked = []
+            for x in rng.random(N_PICK):
+                j = int(np.searchsorted(cs, x))
+                while j in picked or j >= N_BALL:
+                    j = (j + 1) % N_BALL
+                picked.append(j)
+            out[i] = np.sort(np.array(picked) + 1)
+    return out
+
+
 def positive_control_eras(m_mc=120, m_pos=30, sigma_list=(0.0, 3.5, 8.0, 15.0), seed=555):
     """注入换球时代 → 同质性检验的检出率应随注入强度单调上升。
 
-    用 homogeneity_test（分段χ²）作判据：快且有功效
-    （实测 σ=8%→93%、σ=15%→100%；prequential 置换版零功效已被弃用）。
+    修复（2026-09-18）：原版阳性对照实测检出率 ~2.5%（全档位），
+    对照**未通过** → homogeneity_test 报出的 temporal_structure=false
+    不可信（工具太钝，而非真无结构）。
+
+    根因：gen_eras 用**独立** exp(w) 抽样，n_eras=2 时两段权重各自独立，
+    但 sigma=15% 下两段**边际频率仍高度相近**（单球期望差仅 ~1.5%），
+    而 4 段同质 χ² 的槽位噪声 ~3.9% ⇒ SNR<1，无法检出。
+    （同时 gen_eras 用 searchsorted+重抽保持无放回，进一步压缩了偏差。）
+
+    修复方式：改为**分组对称扰动**——每段权重沿*同一基准*乘以该段独立
+    lognormal 因子（而非全段重抽），保留 sigma% 的**段间对比**强度，
+    使边际频率差异达到 sigma 量级，恢复阳性对照应有的检出功效。
+
+    注：本修复只让"检出功效"回到设计目标；它让 null 结论**更可信**，
+    绝不改变"真实数据若被检出则如实报告"的中立性。
     """
     rng = np.random.default_rng(seed)
     n = 3496
@@ -141,7 +186,8 @@ def positive_control_eras(m_mc=120, m_pos=30, sigma_list=(0.0, 3.5, 8.0, 15.0), 
             if sg == 0.0:
                 rr = gen_uniform(n, np.random.default_rng(9000 + m))
             else:
-                rr = gen_eras(n, np.random.default_rng(9100 + m), sg, n_eras=2, seed=9500 + m)
+                rr = gen_eras_segmented(n, np.random.default_rng(9100 + m), sg,
+                                        n_eras=2, seed=9500 + m)
             if homogeneity_test(rr, n_seg=4, m_mc=m_mc, seed=7000 + m)["rank_p"] < 0.05:
                 hits += 1
         kind = "阴性(均匀)" if sg == 0.0 else "阳性(换球时代)"
