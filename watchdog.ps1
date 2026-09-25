@@ -256,6 +256,10 @@ if ($imageSha -and $localSha) {
     }
 } elseif (-not $imageSha) {
     $warnings += "build_info.txt missing (image built without GIT_SHA)"
+} else {
+    # 盲区必须报警，不许沉默（2026-09-25 教训：计划任务上下文里 git 取值失败为空，
+    # 旧版 if/elseif 两不沾 → L2 整层静默跳过，STALE 容器整整一天无人知晓）。
+    $warnings += "L2 BLIND SPOT: git HEAD unreadable from watchdog context (check git PATH / safe.directory under scheduled task)"
 }
 
 # --- L3: tri-carriage audit (scan last 200 lines of daemon.log) ---
@@ -265,7 +269,10 @@ $triCarriage = @{
     "reflective"       = @{ pattern = "\[reflect\]|反省|reflect_epoch"; label = "智能反省"; found = $false; count = 0 }
 }
 if (Test-Path $DaemonLog) {
-    $recentLines = Get-Content $DaemonLog -Tail 200 -Encoding UTF8
+    # 窗口 200→2000（2026-09-25 假警报教训：data_driven 模式 idle 轮每 900s 刷大量
+    # 等待行，200 行窗口全被 idle 稀释，三载体明明活跃(全文件 composer 命中 688)却报
+    # MISSING。判"模块死没死"不能拿最短窗口当证据。）
+    $recentLines = Get-Content $DaemonLog -Tail 2000 -Encoding UTF8
     foreach ($key in $triCarriage.Keys) {
         $p = $triCarriage[$key]
         $matches = $recentLines | Select-String -Pattern $p.pattern

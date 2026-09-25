@@ -19,6 +19,21 @@ $Data = "D:\ssq_evo_data"
 $Log  = Join-Path $Data "predict_cron.log"
 $PyScript = Join-Path $Repo "predict_tonight.py"
 
+# 互斥锁（2026-09-25）：register 与 score 两个计划任务曾被同时触发（9/25 10:49:57 双发），
+# 同时 AppendAllText 同一日志 → 文件锁 → register 相 0x1 死。日志重试只治标，
+# 两个相并行跑（同时 fetch/merge 主表、同时写 predictions.jsonl）才是真正的危险面。
+# 拿不到锁 = 已有实例在跑，写旁路后直接退出，业务交给先到的实例。
+$Mutex = New-Object System.Threading.Mutex($false, "Global\ssq_evo_predict_cron")
+if (-not $Mutex.WaitOne(0)) {
+    try {
+        $spilled = Join-Path $Data "predict_cron_overflow.log"
+        [System.IO.File]::AppendAllText($spilled,
+            ("[{0}] SKIP: another predict_cron instance holds the lock (phase={1}){2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Phase, [Environment]::NewLine),
+            [System.Text.Encoding]::UTF8)
+    } catch {}
+    exit 0
+}
+
 function Log($msg) {
     # v2 (2026-09-25): 日志写入永不抛错。9/24 事故根因——AppendAllText 遇文件锁抛出，
     # ErrorActionPreference=Stop 直接炸掉整个 try 块，register 相在写第一行日志前就死，
@@ -70,4 +85,7 @@ try {
 } catch {
     Log "ERROR phase=$Phase : $_"
     exit 1
+} finally {
+    # 互斥锁显式释放（进程退出 OS 也会回收，但显式释放语义干净、测试好判断）
+    try { $Mutex.ReleaseMutex(); $Mutex.Dispose() } catch {}
 }
