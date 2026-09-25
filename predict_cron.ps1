@@ -20,9 +20,24 @@ $Log  = Join-Path $Data "predict_cron.log"
 $PyScript = Join-Path $Repo "predict_tonight.py"
 
 function Log($msg) {
+    # v2 (2026-09-25): 日志写入永不抛错。9/24 事故根因——AppendAllText 遇文件锁抛出，
+    # ErrorActionPreference=Stop 直接炸掉整个 try 块，register 相在写第一行日志前就死，
+    # 26111 因此漏登记。日志是观测手段，观测失败不得杀死被观测的业务。
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $line = "[$ts] $msg"
-    [System.IO.File]::AppendAllText($Log, $line + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
+    for ($i = 1; $i -le 3; $i++) {
+        try {
+            [System.IO.File]::AppendAllText($Log, $line + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
+            return
+        } catch {
+            try { Start-Sleep -Milliseconds 300 } catch {}
+        }
+    }
+    # 3 次都失败（日志被长期占用）：写到旁路溢出文件，绝不抛出
+    try {
+        $spilled = Join-Path $Data "predict_cron_overflow.log"
+        [System.IO.File]::AppendAllText($spilled, $line + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
+    } catch {}
 }
 
 # Resolve python: prefer managed venv (has numpy/scipy), else host python on PATH.

@@ -91,6 +91,9 @@ def main():
             "bias_tilt": tilt,
         })
 
+    # --- sandbox 回传审计报告 (geilei 契约 4: audit_log不可绕) ---
+    import time as _t
+    _t_start = _t.monotonic()
     out = {
         "meta": {
             "seed": args.seed,
@@ -108,7 +111,25 @@ def main():
     out_path = args.out or ("candidates_seed_%d.json" % args.seed)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
+
+    # 回传独立报告 —— 供本地 watchdog 校验 cloud job 偷懒/跳过/回传伪造 p_raw
+    report = {
+        "seed": args.seed,
+        "git_sha": os.environ.get("GITHUB_SHA", "local"),
+        "time_spent_ms": round((_t.monotonic() - _t_start) * 1000, 1),
+        "n_evaluated": len(all_evals),
+        "expected_eval": args.epochs * args.pop,
+        "n_proposed": len(cands),
+        "best_p_raw": (cands[0].get("p_raw") if cands else None),
+        "debunked_hits": sum(1 for c in cands if c["test"] in debunked_tests),
+        "returned_at": _t.strftime("%Y-%m-%d %H:%M:%S", _t.gmtime()),
+    }
+    report_path = args.out.replace(".json", "_report.json") if args.out else ("report_seed_%d.json" % args.seed)
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+
     print("[ci_evolve] 写出 %d 候选 -> %s" % (len(cands), out_path))
+    print("[ci_evolve] 回传 report -> %s" % report_path)
     if cands:
         b = cands[0]
         print("[ci_evolve] best: sig=%s test=%s p_raw=%s z=%s"

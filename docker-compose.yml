@@ -1,0 +1,30 @@
+# docker-compose.yml —— ssq_evo 7x24 容器化部署
+# 数据全落 D 盘（D:\ssq_evo_data），容器重启不丢
+# 用法：docker compose up -d   （后台常驻）
+#      docker compose logs -f  （看日志）
+#      docker compose down     （停止）
+services:
+  ssq-evo:
+    build:
+      context: .
+      # 注入 git SHA 进镜像（Dockerfile ARG GIT_SHA），用于"容器是否跑旧码"检测。
+      # 重建时必须带 SHA，否则 verify 会报 unknown：
+      #   GIT_SHA=$(git -C D:/ssq_evo rev-parse HEAD) docker compose up -d --build
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+    container_name: ssq-evo-engine
+    restart: unless-stopped
+    ports:
+      - "8088:8088"   # 看板（serve.py 需要时启动）
+    volumes:
+      - D:/ssq_evo_data:/app/data   # 仅数据落 D 盘（不遮盖 /app 下的代码）
+    environment:
+      - TZ=Asia/Shanghai
+      - DATA_DIR=/app/data          # 告诉引擎所有输出写到 /app/data（= D:\ssq_evo_data）
+      - SSQ_TURBO=1                 # 2026-09-25: 拉满搜索强度（watchdog WARN 整改；只影响算力不影响闸门）
+      # 注意：不要设 CYCLE_MINUTES——设了会强制连续/定时模式，覆盖 engine.yaml 的
+      # schedule_mode: data_driven（数据驱动：无新数据 idle，新开奖到达即全量评估+摘要）。
+    # 常驻循环：daemon_loop.py 连续跑(60s 冷却)
+    # 启动前先清陈旧锁：容器进程固定 PID=1，若上次崩在锁上，遗留 lock="1" 会让新实例
+    # 误判"已有实例运行中"而退出，配合 restart:unless-stopped 形成死循环。rm -f 根治之。
+    command: ["sh", "-c", "rm -f /app/data/daemon.lock; exec python -u daemon_loop.py"]

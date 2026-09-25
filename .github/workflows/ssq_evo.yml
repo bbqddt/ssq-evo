@@ -76,9 +76,25 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
-        seed: [1, 2, 3, 4, 5, 6]
+        seed: [1, 2, 3, 5, 7, 11, 13, 17, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Stage learn feedback (bias_corrector.json from data-backup branch, read-only)
+        run: |
+          echo "::notice::ci_evolve backread channel — fetch local L3 feedback from data-backup"
+          git fetch origin data-backup
+          if git show "FETCH_HEAD:bias_corrector.json" > bias_corrector.json 2>/dev/null; then
+            echo "::notice::staged bias_corrector.json (role: read-only backread for diversity tilt)"
+          else
+            echo "::notice::no bias_corrector.json on data-backup; ci_evolve falls back to {} (graceful degrade)"
+          fi
+        env:
+          DATA_DIR: ${{ github.workspace }}
+
+      - name: Output honest redline notice
+        run: |
+          echo "::notice::CLOUD_ROLE=PROPOSAL_ONLY; full-signal gate remains local (D:\\ssq_evo_data\\ingest_candidates.py); this job makes candidates, not verdicts."
 
       - name: Setup Python 3.13
         uses: actions/setup-python@v5
@@ -88,9 +104,10 @@ jobs:
       - name: Install dependencies
         run: pip install --no-cache-dir numpy scipy
 
-      - name: Evolve (seed ${{ matrix.seed }})
+      - name: Evolve (seed ${{ matrix.seed })
         env:
           GITHUB_SHA: ${{ github.sha }}
+          DATA_DIR: ${{ github.workspace }}
         run: python ci_evolve.py --seed ${{ matrix.seed }} --out candidates_seed_${{ matrix.seed }}.json
 
       - name: Upload candidate artifact
