@@ -285,11 +285,25 @@ def register(issue, target_date, window=WINDOW, decay=DECAY, signal=None, method
     # 该 issue 必须尚未开奖（主表里没有），否则不是"预测"而是"回测"
     known = {d["issue"] for d in draws}
     if issue in known:
-        print(f"[register] 警告：主表已含 {issue}（已开奖），这不是预测而是回测。仍按已开奖处理。")
-    # 方法优先级：显式 signal > 显式 method="comp" > 有存活复合树则默认公式驱动 > 朴素边际
+        # 硬拒绝（26106 污染事故 2026-09-25）：给已开奖的期登记"预测"=事后选号伪装成预测，
+        # 污染预注册记录。旧版只警告仍继续，被陈旧主表（fetch 失败、更新晚于开奖）骗过。
+        print(f"[register] 拒绝：主表已含 {issue}（已开奖）——这不是预测而是回测，登记作废。")
+        return
+    # 方法优先级：显式 method="marginal"（竞技场 CERTIFIED，生产默认）> 显式 signal >
+    # 显式 method="comp" > 有存活复合树则公式驱动（仅研究用途需显式选择）
+    # 2026-09-25 竞技场 v3 判决：comp_ensemble(z=+0.54)/signal_regime(z=-0.01) 阳性对照均败
+    # （真有注入信号也提不出来=不配驱动选号），recency_marginal 双过(阳+3.94/阴+1.05)
+    # CERTIFIED → 生产默认切换为朴素递推边际（优胜劣汰，见 MISSION §6）。
     trees_active = bool(load_comp_trees())
-    use_comp = (method == "comp") or (method is None and signal is None and trees_active)
-    if use_comp:
+    use_marginal = (method == "marginal") or (method is None and signal is None)
+    # REJECTED 方法不得默认驱动选号：comp_ensemble 只允许显式 method="comp"（研究用途）
+    use_comp = (method == "comp")
+    if use_marginal:
+        reds, blue = predict(draws, window, decay)
+        method_name = "recency_weighted_empirical_marginal"
+        params = {"window": window, "decay": decay, "arena": "CERTIFIED v3 z_pos=+3.94 z_neg=+1.05"}
+        verdict_ctx = "方法竞技场v3 CERTIFIED(阳性z=+3.94/阴性z=+1.05); 朴素递推边际; null域预注册猜测"
+    elif use_comp:
         trees = load_comp_trees()
         reds, blue, info = predict_from_comp_ensemble(trees, draws, window, decay)
         method_name = f"comp_ensemble_{info.get('n_trees')}trees"
@@ -514,7 +528,7 @@ def _mark_scored(issue, result):
 def _summarize_scored():
     """累计汇总：让长期观察公式驱动 vs 随机基线变得直观。"""
     preds = load_preds()
-    sc = [p for p in preds if p.get("scored") and p.get("result")]
+    sc = [p for p in preds if p.get("scored") and p.get("result") and not p.get("invalid")]
     if not sc:
         return
     e_red = sum(p["result"].get("engine_red_hit", 0) for p in sc)
@@ -603,11 +617,28 @@ def sync_cloud():
         print(f"[sync] 警告：云端同步异常（{e}），仅用本地预测文件继续。")
 
 
-def auto(phase="both", signal="red_gap_max", window=WINDOW, decay=DECAY, method=None):
+def auto(phase="both", signal=None, window=WINDOW, decay=DECAY, method="marginal"):
     """开奖日自动流程（供周期性自动化调用）：
-      register: 今天若为开奖日(周二/四/日)且下一期尚未登记，则公式驱动预注册(开奖前，时间戳不可篡改)。
+      register: 今天若为开奖日(周二/四/日)且下一期尚未登记，则预注册(开奖前，时间戳不可篡改)。
       score:    对所有'已登记未打分且已开奖'的期 fetch+打分，并打印累计汇总。
-    默认 method=comp：优先用引擎进化出的复合公式树集成投票驱动选号（公式参与计算）。"""
+    生产方法 2026-09-25 起 = method="marginal"（方法竞技场 v3 唯一 CERTIFIED）。"""
+    # 根因守卫（26107 事故复盘）：期号推算与"已开奖"检查都依赖主表新鲜度。
+    # 主表陈旧（上次 fetch 失败、或 PC 关机跨开奖日后补跑）会把已开奖期算成"下一期"
+    # 造成事后登记污染。register 相开工前必须先尽力 fetch 一次，把主表拉到最新。
+    if phase in ("both", "register"):
+        try:
+            sys.path.insert(0, HERE)
+            import data as D
+            fresh = D.fetch_recent()
+            if fresh:
+                master = D.load_master(MASTER)
+                master, added = D.update_master(master, fresh)
+                D.save_master(master, MASTER)
+                if added:
+                    print(f"[auto:register] 预fetch 合并 {added} 期，主表行数={len(master)}")
+        except Exception as e:
+            print(f"[auto:register] 警告：预 fetch 失败({e})，主表可能陈旧，"
+                  f"register 硬守卫(主表已含该期=拒绝)仍会兜底拦截污染。")
     draws = load_draws()
     known = {d["issue"] for d in draws}
     today = datetime.date.today().strftime("%Y-%m-%d")
@@ -638,7 +669,8 @@ def auto(phase="both", signal="red_gap_max", window=WINDOW, decay=DECAY, method=
                           f"事后登记=污染预测记录，本期预测样本作废（诚实损失）。")
                 else:
                     register(nxt, today, window, decay, signal=signal, method=method)
-                    tag = f"公式驱动复合树集成" if method == "comp" or (method is None and load_comp_trees()) else f"公式驱动 {signal}"
+                    tag = ("公式驱动复合树集成" if method == "comp"
+                           else (f"公式驱动 {signal}" if signal else "竞技场CERTIFIED递推边际"))
                     print(f"[auto:register] 已为 {today}(开奖日) 预注册 {nxt}（{tag} + 随机基线）。")
 
     if phase in ("both", "score"):
@@ -679,10 +711,10 @@ def main():
     s.add_argument("--issue", required=True)
     a = sub.add_parser("auto")
     a.add_argument("--phase", default="both", choices=["both", "register", "score"])
-    a.add_argument("--signal", default="red_gap_max",
-                   help="公式驱动信号(默认 red_gap_max，来自引擎进化最佳存活信号)")
-    a.add_argument("--method", default=None, choices=[None, "comp"],
-                   help="comp=用引擎复合公式树集成驱动(默认有树则自动启用)")
+    a.add_argument("--signal", default=None,
+                   help="公式驱动信号(如 red_gap_max)；默认 None=走 method 参数")
+    a.add_argument("--method", default="marginal", choices=[None, "comp", "marginal"],
+                   help="marginal=竞技场CERTIFIED生产默认(2026-09-25起)；comp=研究用途")
     a.add_argument("--window", type=int, default=WINDOW)
     a.add_argument("--decay", type=float, default=DECAY)
     args = ap.parse_args()
