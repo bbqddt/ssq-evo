@@ -285,7 +285,7 @@ if (Test-Path $DaemonLog) {
 foreach ($key in @("composer", "novelty_search", "reflective")) {
     $tc = $triCarriage[$key]
     if ($tc.found) {
-        $info += ("[$($tc.label)] ACTIVE (${tc.count} hits in last 200 lines)")
+        $info += ("[$($tc.label)] ACTIVE ($($tc.count) hits in last 2000 lines)")
     } else {
         # novelty/reflect may be legitimately absent in first few cycles after boot;
         # flag as WARN only if we have enough log history and they're truly absent.
