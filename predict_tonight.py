@@ -558,9 +558,12 @@ def sync_cloud():
     网络失败（代理未起 / GitHub 不可达）只警告不阻断：本地文件是打分的权威源。
     """
     import subprocess
+    # sslBackend=openssl 只属于 Windows-schannel 宿主机（治 CRYPT_E_REVOCATION_OFFLINE）；
+    # GitHub runner 的 git 是 gnutls 构建，带这参数直接炸（cloud-register 7 连败根因之一）。
+    ssl_args = ["-c", "http.sslBackend=openssl"] if os.name == "nt" else []
     try:
         r = subprocess.run(
-            ["git", "-c", "http.sslBackend=openssl", "fetch", "--quiet", "origin", "data-backup"],
+            ["git"] + ssl_args + ["fetch", "--quiet", "origin", "data-backup"],
             cwd=HERE, capture_output=True, text=True, timeout=180)
         if r.returncode != 0:
             print(f"[sync] 警告：fetch data-backup 失败（网络/代理？），仅用本地预测文件继续。"

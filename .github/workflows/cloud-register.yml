@@ -9,9 +9,11 @@ name: cloud-register
 
 on:
   schedule:
-    # 18:30 北京时间 = 10:30 UTC；开奖日 周二/四/日 = 2,4,0。
-    # GitHub cron 可能延迟 ~15 分钟，代码内 21:15 守卫会拒绝任何开奖后才跑到的执行。
-    - cron: "30 10 * * 2,4,0"
+    # 2026-09-25 调整：北京 17:45（UTC 09:45）= 本地 18:00 cron 之前 15 分钟。
+    # 原 18:30 北京 + GitHub 调度延迟（实测 9/24 延迟 ~1h，23:18 才跑到）撞上
+    # 21:15 诚实红线 → 兜底形同虚设。提前到开奖前 3.5h，延迟容忍度大幅放宽；
+    # 若云端先登记成功，本地 18:00 的 sync 合并按"最早 registered_ts 胜"自然共存。
+    - cron: "45 9 * * 2,4,0"
   workflow_dispatch: {}
 
 permissions:
@@ -44,6 +46,9 @@ jobs:
         run: |
           set -e
           git fetch origin data-backup
+          # 记住 data-backup 的 SHA 供 push 相用——FETCH_HEAD 不可靠：python 侧
+          # sync_cloud() 的 fetch 若中途失败会把 FETCH_HEAD 清掉（9/24 连败链一环）。
+          echo "BACKUP_SHA=$(git rev-parse FETCH_HEAD)" >> "$GITHUB_ENV"
           mkdir -p cloud_data
           git show FETCH_HEAD:ssq_master.csv    > cloud_data/ssq_master.csv
           git show FETCH_HEAD:predictions.jsonl > cloud_data/predictions.jsonl
@@ -64,13 +69,15 @@ jobs:
       - name: Push updated predictions.jsonl to data-backup
         run: |
           set -e
-          if git diff --no-index --quiet <(git show FETCH_HEAD:predictions.jsonl) cloud_data/predictions.jsonl; then
+          # 用 stage 相记录的 BACKUP_SHA，不用 FETCH_HEAD——python sync_cloud 的
+          # fetch 若失败会清掉 FETCH_HEAD（9/24 连败链：sync 炸→push 相 invalid object）
+          git diff --no-index --quiet <(git show "$BACKUP_SHA":predictions.jsonl) cloud_data/predictions.jsonl && {
             echo "no change (already registered / not a draw day / post-draw guard rejected); nothing to push"
             exit 0
-          fi
+          }
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -q -B data-backup-work FETCH_HEAD
+          git checkout -q -B data-backup-work "$BACKUP_SHA"
           cp cloud_data/predictions.jsonl predictions.jsonl
           git add predictions.jsonl
           git commit -m "cloud-register: pre-draw registration ($(date -u +%Y-%m-%dT%H:%MZ))"
