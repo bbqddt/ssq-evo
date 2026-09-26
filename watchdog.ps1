@@ -318,6 +318,31 @@ foreach ($mod in $requiredModules) {
     }
 }
 
+# --- L5: ops audit (登记链/云端腿/任务层——自我发现问题，2026-09-25 用户指令) ---
+# 监督系统不能只盯引擎；登记链断裂、云端连败、任务双发由 ops_audit 每个 watchdog
+# 周期自动体检（探测器自带阳性对照，无功效即自测失败）。CRIT 计入 criticals。
+$pyAudit = "C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
+if (-not (Test-Path $pyAudit)) { $pyAudit = "python" }
+try {
+    $auditJson = Join-Path $DataDir "audit\ops_audit\latest.json"
+    $auditOut = & $pyAudit (Join-Path $RepoDir "ops_audit.py") 2>&1
+    $auditCode = $LASTEXITCODE
+    if (Test-Path $auditJson) {
+        $rep = Get-Content $auditJson -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($fd in $rep.findings) {
+            $line = "[ops_audit] $($fd.check): $($fd.msg)"
+            if ($fd.sev -eq "CRIT") { $criticals += $line }
+            elseif ($fd.sev -eq "WARN") { $warnings += $line }
+            else { $info += $line }
+        }
+        $info += ("ops_audit worst={0}" -f $rep.worst)
+    } else {
+        $warnings += "ops_audit produced no report (exit=$auditCode) — L5 blind spot"
+    }
+} catch {
+    $warnings += "ops_audit run failed: $_ — L5 blind spot"
+}
+
 # ============================================================
 # Summary & Action
 # ============================================================
