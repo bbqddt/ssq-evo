@@ -321,7 +321,7 @@ foreach ($mod in $requiredModules) {
 # --- L5: ops audit (登记链/云端腿/任务层——自我发现问题，2026-09-25 用户指令) ---
 # 监督系统不能只盯引擎；登记链断裂、云端连败、任务双发由 ops_audit 每个 watchdog
 # 周期自动体检（探测器自带阳性对照，无功效即自测失败）。CRIT 计入 criticals。
-$pyAudit = "C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
+$pyAudit = "C:\Users\Administrator\.workbuddy-ai\binaries\python\versions\3.13.12\python.exe"
 if (-not (Test-Path $pyAudit)) { $pyAudit = "python" }
 try {
     $auditJson = Join-Path $DataDir "audit\ops_audit\latest.json"
@@ -336,6 +336,27 @@ try {
             else { $info += $line }
         }
         $info += ("ops_audit worst={0}" -f $rep.worst)
+
+        # Foreman 式仲裁：auto 类动作 watchdog 直接执行，不再等人喊。
+        # 目前只有 container_sha->rebuild 是 auto（幂等、无中断风险）。
+        foreach ($act in $rep.actions) {
+            if (-not $act.auto) { continue }
+            if ($act.action -eq "rebuild" -and $act.check -eq "container_sha") {
+                $info += ("[arbiter] auto-rebuild: 容器 STALE，触发重建对齐 git HEAD")
+                Push-Location $RepoDir
+                $env:GIT_SHA = git rev-parse HEAD
+                $rb = & docker compose up -d --build --force-recreate 2>&1
+                $rbCode = $LASTEXITCODE
+                Pop-Location
+                if ($rbCode -eq 0) {
+                    $info += ("[arbiter] auto-rebuild OK，verify_deployment 复核：")
+                    $ver = & $pyAudit (Join-Path $RepoDir "verify_deployment.py") 2>&1
+                    $info += ($ver | Select-Object -Last 3)
+                } else {
+                    $warnings += ("[arbiter] auto-rebuild FAILED (exit=$rbCode)：$($rb | Select-Object -First 2)"
+                }
+            }
+        }
     } else {
         $warnings += "ops_audit produced no report (exit=$auditCode) — L5 blind spot"
     }

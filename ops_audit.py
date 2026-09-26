@@ -221,12 +221,28 @@ def mtime_age_minutes(path):
 
 
 def git_head():
+    """取本地 git HEAD 短 SHA。优先 git 二进制；取不到（如计划任务上下文 PATH 无 git）
+    则纯 Python 直读 .git——盲区必须自己填上，不能等环境施舍。"""
     try:
         r = subprocess.run(["git", "-C", HERE, "rev-parse", "--short", "HEAD"],
                            capture_output=True, text=True, timeout=30)
-        return r.stdout.strip() if r.returncode == 0 else ""
-    except Exception:
-        return ""
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except Exception as e:
+        sys.stderr.write("git_head: git binary unavailable (%s) — falling back to .git read\n" % e)
+    # 纯 stdlib 回退：解析 .git/HEAD（支持 ref 与 detached 两种形态）
+    try:
+        head_p = os.path.join(HERE, ".git", "HEAD")
+        with open(head_p, encoding="utf-8") as fh:
+            ref = fh.read().strip()
+        if ref.startswith("ref:"):
+            sha_p = os.path.join(HERE, ".git", ref[4:].strip())
+            with open(sha_p, encoding="utf-8") as fh:
+                return fh.read().strip()[:7]
+        return ref[:7]
+    except Exception as e:
+        sys.stderr.write("git_head failed: %s\n" % e)
+    return ""
 
 
 def docker_image_sha():
@@ -327,8 +343,29 @@ def run_all():
         findings_add(f, name, sev, msg)
 
     worst = max(({"INFO": 0, "OK": 0, "WARN": 1, "CRIT": 2}[x["sev"]] for x in f), default=0)
+
+    # Foreman 式动作菜单：发现不能停在"记一条 WARN"，必须落到确定性动作。
+    # auto=可自动执行（无副作用/幂等）；manual=需人工确认（有中断风险）。
+    ACTION_TABLE = {
+        "container_sha":  ("rebuild", "auto"),    # 重建是幂等的，build_info 对齐即解除
+        "cron_no_done":   ("restart_cron", "manual"),  # 可能与进行中的任务冲突
+        "cron_double_fire": ("verify_mutex", "auto"),  # 检查旁路记录存在即可
+        "wd_dead":        ("restart_watchdog", "manual"),
+        "hb_stale":       ("check_cloud", "manual"),
+        "cloud_dead":     ("check_cloud", "manual"),
+        "master_fresh":   ("check_ingest", "manual"),
+        "log_garble":     ("observe", "auto"),     # 观察项，无需动作
+    }
+    actions = []
+    for x in f:
+        if x["sev"] == "OK" or x["sev"] == "INFO":
+            continue
+        act, kind = ACTION_TABLE.get(x["check"], ("investigate", "manual"))
+        actions.append({"check": x["check"], "sev": x["sev"], "action": act, "auto": kind == "auto"})
+
     report = {"ts": now.isoformat(timespec="seconds"),
-              "worst": ["OK", "WARN", "CRIT"][worst], "findings": f}
+              "worst": ["OK", "WARN", "CRIT"][worst],
+              "findings": f, "actions": actions}
     with open(os.path.join(OUT, "latest.json"), "w", encoding="utf-8") as fh:
         json.dump(report, fh, ensure_ascii=False, indent=1)
     with open(state_p, "w", encoding="utf-8") as fh:
