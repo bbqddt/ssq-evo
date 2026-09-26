@@ -230,15 +230,15 @@ def git_head():
 
 
 def docker_image_sha():
-    """取容器实际运行的镜像短 SHA（前7位），用 docker inspect 避免 Git Bash 路径转换 bug。"""
+    """取容器 build_info.txt 里构建时写入的 GIT_SHA（与 verify_deployment 同源）。
+    MSYS_NO_PATHCONV=1 绕开 Git Bash 把 /app/... 转成 Windows 路径的 bug。"""
+    env = dict(os.environ, MSYS_NO_PATHCONV="1")
     try:
         r = subprocess.run(
-            ["docker", "inspect", "--format", "{{.Image}}", "ssq-evo-engine"],
-            capture_output=True, text=True, timeout=30)
-        if r.returncode == 0 and r.stdout.strip():
-            # 返回 sha256:<full> → 截取前 7 位与 git rev-parse --short 对齐
-            img = r.stdout.strip()
-            return img.replace("sha256:", "")[:7]
+            ["docker", "exec", "ssq-evo-engine", "cat", "/app/build_info.txt"],
+            capture_output=True, text=True, timeout=30, env=env)
+        if r.returncode == 0:
+            return r.stdout.strip()[:7]
     except Exception as e:
         sys.stderr.write("docker_image_sha failed: %s\n" % e)
     return ""
