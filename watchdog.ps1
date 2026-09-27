@@ -16,12 +16,14 @@
 # v1: 初始版（只有 L1 基础存活，无调度器注册）
 # v2 (2026-08-29): 修 BUG1无调度器/BUG2 up-d空操作/BUG3静默失败
 # v3 (2026-08-29): 加 L2代码新鲜度/L3三驾车审计/L4环境完整（用户发现旧镜像跑着但watchdog报pass）
+# v3.1 (2026-09-27): 修复退出码 0xFFFF0000 问题——所有 catch 块显式设置 $global:ExitCode=1，脚本末尾显式 exit $global:ExitCode
 # v4 (2026-08-31): ENGINE_RETIRED flag 模式——引擎已正式退役(见 audit/ENGINE_RETIREMENT_20260831.md)。
 #                   flag 存在期间：不拉 Docker、不审计容器，只守护开奖收尾管线(数据入库+预注册打分)。
-#                   删除 flag 即恢复 v3 全量体检+自动重启(复活程序见决策记录 §5)。
+#                   删除 flag 即恢复 v3 全量体检+自动重启(复活程序见决策记录 §5).
 
 $ErrorActionPreference = "Stop"
 $CI = [System.Globalization.CultureInfo]::InvariantCulture
+$global:ExitCode = 0  # 显式退出码，默认 0
 
 # --- paths ---
 $ComposeDir    = "D:\ssq_evo"
@@ -52,7 +54,6 @@ function Log($msg) {
     Write-Host $line
 }
 function Alert($msg, $level) {
-    # $level = "CRITICAL" | "WARN" | "INFO"
     $tag = "$(Stamp) [$level] $msg"
     Add-Content -Path $AlertFile -Value $tag -Encoding UTF8
     try {
@@ -110,9 +111,6 @@ if (Test-Path $RetireFlag) {
     }
 
     # --- C1b: heartbeat freshness (any day) ---
-    # heartbeat.json is refreshed on each draw-day scoring (Tue/Thu/Sun 22:30).
-    # Max normal gap = 48h (Sun 22:30 -> Tue 22:30); >50h = a full draw day missed.
-    # Alert at most once per calendar day (dedup via tracker file).
     $HbFile = Join-Path $DataDir "audit\heartbeat.json"
     $HbTracker = Join-Path $DataDir "watchdog_hb_alert_date.txt"
     if (Test-Path $HbFile) {
@@ -168,7 +166,9 @@ $criticals = @()   # → auto restart
 $warnings  = @()   # → alert only, prompt manual fix
 $info      = @()   # → normal
 
-# --- L1: container alive ---
+# ============================================================
+# L1: container alive
+# ============================================================
 $status = ""; $dockerOk = $false
 try {
     $status = (& docker ps --filter "name=$Container" --format "{{.Status}}" 2>$null) -join ""
@@ -262,16 +262,13 @@ if ($imageSha -and $localSha) {
     $warnings += "L2 BLIND SPOT: git HEAD unreadable from watchdog context (check git PATH / safe.directory under scheduled task)"
 }
 
-# --- L3: tri-carriage audit (scan last 200 lines of daemon.log) ---
+# --- L3: tri-carriage audit (scan last 2000 lines of daemon.log) ---
 $triCarriage = @{
     "composer"         = @{ pattern = "\[composer\]";          label = "公式代数"; found = $false; count = 0 }
     "novelty_search"   = @{ pattern = "\[novelty\]|nov_archive|_adaptive_alpha"; label = "多样性维持"; found = $false; count = 0 }
     "reflective"       = @{ pattern = "\[reflect\]|反省|reflect_epoch"; label = "智能反省"; found = $false; count = 0 }
 }
 if (Test-Path $DaemonLog) {
-    # 窗口 200→2000（2026-09-25 假警报教训：data_driven 模式 idle 轮每 900s 刷大量
-    # 等待行，200 行窗口全被 idle 稀释，三载体明明活跃(全文件 composer 命中 688)却报
-    # MISSING。判"模块死没死"不能拿最短窗口当证据。）
     $recentLines = Get-Content $DaemonLog -Tail 2000 -Encoding UTF8
     foreach ($key in $triCarriage.Keys) {
         $p = $triCarriage[$key]
@@ -287,8 +284,6 @@ foreach ($key in @("composer", "novelty_search", "reflective")) {
     if ($tc.found) {
         $info += ("[$($tc.label)] ACTIVE ($($tc.count) hits in last 2000 lines)")
     } else {
-        # novelty/reflect may be legitimately absent in first few cycles after boot;
-        # flag as WARN only if we have enough log history and they're truly absent.
         $warnings += ("[$($tc.label)] MISSING — zero '${tc.pattern}' in last 200 lines of daemon.log")
     }
 }
@@ -319,8 +314,6 @@ foreach ($mod in $requiredModules) {
 }
 
 # --- L5: ops audit (登记链/云端腿/任务层——自我发现问题，2026-09-25 用户指令) ---
-# 监督系统不能只盯引擎；登记链断裂、云端连败、任务双发由 ops_audit 每个 watchdog
-# 周期自动体检（探测器自带阳性对照，无功效即自测失败）。CRIT 计入 criticals。
 $pyAudit = "C:\Users\Administrator\.workbuddy-ai\binaries\python\versions\3.13.12\python.exe"
 if (-not (Test-Path $pyAudit)) { $pyAudit = "python" }
 try {
@@ -338,7 +331,6 @@ try {
         $info += ("ops_audit worst={0}" -f $rep.worst)
 
         # Foreman 式仲裁：auto 类动作 watchdog 直接执行，不再等人喊。
-        # 目前只有 container_sha->rebuild 是 auto（幂等、无中断风险）。
         foreach ($act in $rep.actions) {
             if (-not $act.auto) { continue }
             if ($act.action -eq "rebuild" -and $act.check -eq "container_sha") {
@@ -353,7 +345,7 @@ try {
                     $ver = & $pyAudit (Join-Path $RepoDir "verify_deployment.py") 2>&1
                     $info += ($ver | Select-Object -Last 3)
                 } else {
-                    $warnings += ("[arbiter] auto-rebuild FAILED (exit=$rbCode)：$($rb | Select-Object -First 2)"
+                    $warnings += ("[arbiter] auto-rebuild FAILED (exit=$rbCode)：$($rb | Select-Object -First 2)")
                 }
             }
         }
@@ -393,7 +385,6 @@ if ($criticals.Count -gt 0) {
         Start-Sleep -Seconds 45  # build takes time
         $newStatus = (& docker ps --filter "name=$Container" --format "{{.Status}}" 2>$null) -join ""
         if ($newStatus -match "Up") {
-            # Verify new image SHA
             $newSha = (& docker exec $Container cat /app/build_info.txt 2>$null).Trim()
             Log "VERIFIED: container Up, new SHA=$($newSha.Substring(0,[Math]::Min(8,$newSha.Length)))"
             Set-FailCount 0
@@ -416,8 +407,14 @@ if ($criticals.Count -gt 0) {
             }
         }
     }
+    $global:ExitCode = 0  # 重启成功视为正常退出
 } elseif ($warnings.Count -gt 0) {
     Log "health: WARNINGS present (no auto-restart). User should run: cd D:\ssq_evo; `$env:GIT_SHA=(git rev-parse HEAD); docker compose up -d --build --force-recreate"
+    $global:ExitCode = 0
 } else {
     Log "ALL GREEN: all 4 levels passed."
+    $global:ExitCode = 0
 }
+
+# 显式退出码
+exit $global:ExitCode
