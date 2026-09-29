@@ -142,7 +142,9 @@ if (Test-Path $RetireFlag) {
         $lastWk = ""
         if (Test-Path $WkTracker) { $lastWk = (Get-Content $WkTracker -Encoding UTF8 | Select-Object -First 1) }
         if ($lastWk -ne $today) {
-            $py = "C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
+            # 2026-09-29: old .workbuddy envs default retired; prefer managed python
+            $py = "C:\Users\Administrator\.workbuddy-ai\binaries\python\versions\3.13.12\python.exe"
+            if (-not (Test-Path $py)) { $py = "C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\python.exe" }
             try {
                 $out = & $py "D:\ssq_evo\preregistered_scorer.py" --status 2>&1
                 foreach ($l in $out) { Log "  prereg: $l" }
