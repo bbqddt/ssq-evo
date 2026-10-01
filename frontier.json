@@ -23,6 +23,117 @@
       "q": 0.9497878359264499,
       "verdict": "随机区间",
       "z": -0.33654381701226366
+    },
+    {
+      "sig": "comp",
+      "test": "dfa_alpha",
+      "params": {
+        "_comp": {
+          "op": "ewm",
+          "a": "red_sum",
+          "b": "complex_field",
+          "k": 4,
+          "read": "mean"
+        }
+      },
+      "verdict": "SURVIVOR",
+      "q": 0.024390243902439025,
+      "z": 0.0
+    },
+    {
+      "sig": "comp",
+      "test": "multiscale_se",
+      "params": {
+        "_comp": {
+          "op": "diff_k",
+          "a": "red_zone_entropy",
+          "b": "vector_phase",
+          "k": 2,
+          "read": "rev"
+        }
+      },
+      "verdict": "SURVIVOR",
+      "q": 0.024390243902439025,
+      "z": 0.0
+    },
+    {
+      "sig": "comp",
+      "test": "mi_max",
+      "params": {
+        "_comp": {
+          "op": "rank",
+          "a": "red_low_count",
+          "b": "red_sum_mod16",
+          "k": 1,
+          "read": "osc"
+        }
+      },
+      "verdict": "SURVIVOR",
+      "q": 0.024390243902439025,
+      "z": 0.0
+    },
+    {
+      "sig": "comp",
+      "test": "acf_max",
+      "params": {
+        "_comp": {
+          "op": "diff_k",
+          "a": "red_prime_count",
+          "b": "red_energy",
+          "k": 5,
+          "read": "rev"
+        }
+      },
+      "verdict": "SURVIVOR",
+      "q": 0.024390243902439025,
+      "z": 0.0
+    },
+    {
+      "sig": "comp",
+      "test": "acf_max",
+      "params": {
+        "_comp": {
+          "op": "lag",
+          "a": "red_recurrence_mean",
+          "b": "red_energy",
+          "k": 1,
+          "read": "osc"
+        }
+      },
+      "verdict": "SURVIVOR",
+      "q": 0.024390243902439025,
+      "z": 0.0
+    },
+    {
+      "sig": "red_mean",
+      "test": "corr_dim_slope",
+      "params": {
+        "_sig": {},
+        "_test": {
+          "m_max": 4,
+          "tau": 3
+        },
+        "_reorder": "identity"
+      },
+      "verdict": "SURVIVOR",
+      "q": 0.04878048780487805,
+      "z": 0.0
+    },
+    {
+      "sig": "comp",
+      "test": "mi_max",
+      "params": {
+        "_comp": {
+          "op": "ewm",
+          "a": "vector_mag",
+          "b": "complex_field",
+          "k": 3,
+          "read": "mean"
+        }
+      },
+      "verdict": "SURVIVOR",
+      "q": 0.024390243902439025,
+      "z": 0.0
     }
   ],
   "tried": [
@@ -6816,7 +6927,14 @@
     "comp|acf_max|{\"_comp\": {\"a\": \"red_delta_mean\", \"b\": \"red_zone_entropy\", \"k\": 2, \"op\": \"cos\", \"read\": \"rev\"}}",
     "red_mean|corr_dim_slope|{\"_reorder\": \"block\", \"_sig\": {}, \"_test\": {\"tau\": 1}}",
     "comp|multiscale_se|{\"_comp\": {\"a\": \"red_gap_mean\", \"b\": \"blue\", \"k\": 6, \"op\": \"z\", \"read\": \"cont\"}}",
-    "red_delta_mean|corr_dim_slope|{\"_reorder\": \"reverse\", \"_sig\": {}, \"_test\": {\"m_max\": 7, \"tau\": 3}}"
+    "red_delta_mean|corr_dim_slope|{\"_reorder\": \"reverse\", \"_sig\": {}, \"_test\": {\"m_max\": 7, \"tau\": 3}}",
+    "comp|dfa_alpha|{\"_comp\": {\"a\": \"red_sum\", \"b\": \"complex_field\", \"k\": 4, \"op\": \"ewm\", \"read\": \"mean\"}}",
+    "comp|multiscale_se|{\"_comp\": {\"a\": \"red_zone_entropy\", \"b\": \"vector_phase\", \"k\": 2, \"op\": \"diff_k\", \"read\": \"rev\"}}",
+    "comp|mi_max|{\"_comp\": {\"a\": \"red_low_count\", \"b\": \"red_sum_mod16\", \"k\": 1, \"op\": \"rank\", \"read\": \"osc\"}}",
+    "comp|acf_max|{\"_comp\": {\"a\": \"red_prime_count\", \"b\": \"red_energy\", \"k\": 5, \"op\": \"diff_k\", \"read\": \"rev\"}}",
+    "comp|acf_max|{\"_comp\": {\"a\": \"red_recurrence_mean\", \"b\": \"red_energy\", \"k\": 1, \"op\": \"lag\", \"read\": \"osc\"}}",
+    "red_mean|corr_dim_slope|{\"_reorder\": \"identity\", \"_sig\": {}, \"_test\": {\"m_max\": 4, \"tau\": 3}}",
+    "comp|mi_max|{\"_comp\": {\"a\": \"vector_mag\", \"b\": \"complex_field\", \"k\": 3, \"op\": \"ewm\", \"read\": \"mean\"}}"
   ],
   "best_z_history": [
     3.5397,
