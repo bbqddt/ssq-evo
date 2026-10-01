@@ -41,6 +41,33 @@ def _now_beijing():
         return datetime.datetime.now()
 
 
+def _today_beijing():
+    """北京时间的今天（date）。与 _now_beijing() 同源。
+
+    2026-10-01 修复：此前 auto() 用 datetime.date.today()（进程本地日期）算 target_date
+    和开奖日判定，而 registered_ts 用 _now_beijing()。云端 runner 是 UTC，两者错位：
+    9/29 16:06 UTC 的 cloud-register 运行 → target_date=9/29(UTC) 但 registered_ts=9/30 00:07(北京)，
+    触发 ops_audit 的 reg>target 污染误判（CRIT 假阳性）。日期与时间戳必须同源。"""
+    return _now_beijing().date()
+
+
+DRAW_WEEKDAYS = (1, 3, 6)  # 周一=0 … 周二/四/日 开奖
+
+
+def _next_draw_date(from_date):
+    """返回 from_date（含）当天或之后的第一个开奖日（周二/四/日）。
+
+    target_date 语义 = 该期实际开奖日（不是运行日）。历史记录里登记发生在开奖日当天
+    18:00，两者恰好相同；但云端延迟运行可能落在非开奖日（如 9/30 周三 00:06 注册
+    周四 10/1 的期），此时 target 必须指向真正开奖日，否则 ops_audit 会把合法的
+    提前注册误判成"事后选号"。"""
+    for i in range(7):
+        d = from_date + datetime.timedelta(days=i)
+        if d.weekday() in DRAW_WEEKDAYS:
+            return d
+    return from_date  # 不可达（7 天内必有开奖日）
+
+
 # 预测方法默认超参
 WINDOW = 150      # 尾窗长度（前序多少期参与）
 DECAY = 0.985     # 指数衰减（越近期权重越高）；0.985^150≈0.10
@@ -644,9 +671,16 @@ def auto(phase="both", signal=None, window=WINDOW, decay=DECAY, method="marginal
                   f"register 硬守卫(主表已含该期=拒绝)仍会兜底拦截污染。")
     draws = load_draws()
     known = {d["issue"] for d in draws}
-    today = datetime.date.today().strftime("%Y-%m-%d")
-    wd = datetime.date.today().weekday()
-    is_draw_day = wd in (1, 3, 6)  # 周一=0 … 周日=6 → 周二/四/日
+    # 2026-10-01：日期与开奖日判定统一与 registered_ts 同源（北京时间），
+    # 不能用裸 datetime.date.today()——云端 runner 是 UTC，会在北京 00:00-08:00 窗口错位。
+    _bj_today = _today_beijing()
+    today = _bj_today.strftime("%Y-%m-%d")
+    # 开奖日窗口 = 北京日期是开奖日，或进程本地日期是开奖日。
+    # 后半段专为云端兜底保留：GitHub 调度延迟可能跨过北京午夜（实测 9/29 16:06 UTC
+    # = 北京 9/30 00:06，UTC 日仍是周二开奖日），此时仍需为周四的期登记，不能因
+    # 北京已换日而跳过（否则云端兜底在迟到场景下失效）。取并集只放宽、不收紧。
+    is_draw_day = (_bj_today.weekday() in DRAW_WEEKDAYS
+                   or datetime.date.today().weekday() in DRAW_WEEKDAYS)
 
     # 先与云端(data-backup 分支)对齐：PC 关机时 GitHub Actions 会兜底登记，
     # 本地 register（避免重复登记）和 score（避免漏打分/被心跳覆盖）都必须先看到它。
@@ -671,10 +705,14 @@ def auto(phase="both", signal=None, window=WINDOW, decay=DECAY, method="marginal
                     print(f"[auto:register] 放弃补登记 {nxt}：当前 {hhmm} 已过开奖时刻 21:15，"
                           f"事后登记=污染预测记录，本期预测样本作废（诚实损失）。")
                 else:
-                    register(nxt, today, window, decay, signal=signal, method=method)
+                    # target_date = 该期实际开奖日（不是运行日）。开奖日注册时两者相同；
+                    # 若注册发生在开奖日之前的窗口（云端延迟运行等），必须指向真正的开奖日，
+                    # 否则 ops_audit 的 reg>target 检查会误判为"事后选号"。
+                    target = _next_draw_date(_bj_today).strftime("%Y-%m-%d")
+                    register(nxt, target, window, decay, signal=signal, method=method)
                     tag = ("公式驱动复合树集成" if method == "comp"
                            else (f"公式驱动 {signal}" if signal else "竞技场CERTIFIED递推边际"))
-                    print(f"[auto:register] 已为 {today}(开奖日) 预注册 {nxt}（{tag} + 随机基线）。")
+                    print(f"[auto:register] 已为 {target}(开奖日) 预注册 {nxt}（{tag} + 随机基线）。")
 
     if phase in ("both", "score"):
         # 对所有'已登记未打分'的期调 score()；score() 内部先 fetch 最新开奖并合并进主表，
